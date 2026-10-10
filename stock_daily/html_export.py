@@ -1,0 +1,90 @@
+"""Standalone, read-only HTML snapshots with local assets and no credentials."""
+
+import json
+import os
+import secrets
+import tempfile
+from pathlib import Path
+
+from jinja2 import Environment, FileSystemLoader, select_autoescape
+from sqlalchemy import select
+
+from .config import now
+from .db import bars
+from .providers import DataError, parse_day
+from .service import dashboard, tracking
+
+ASSETS = Path(__file__).parent
+
+
+def script_json(value):
+    # JSON is placed inside a script data block; HTML's parser recognizes </script>
+    # even inside a quoted JSON string, so escape all HTML-significant characters.
+    result = json.dumps(value, ensure_ascii=False, allow_nan=False, separators=(",", ":"))
+    for character, escaped in (("<", "\\u003c"), (">", "\\u003e"), ("&", "\\u0026"),
+                               ("\u2028", "\\u2028"), ("\u2029", "\\u2029")):
+        result = result.replace(character, escaped)
+    return result
+
+
+def atomic_write(path, content):
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="w", encoding="utf-8", dir=path.parent, delete=False) as file:
+            temporary = file.name
+            file.write(content)
+        os.replace(temporary, path)
+    finally:
+        if temporary and Path(temporary).exists():
+            Path(temporary).unlink()
+
+
+def export_html(db, settings, day=None, output=None):
+    if day:
+        parse_day(day)
+    data = dashboard(db, settings, day)
+    report = data["report"]
+    if day and report is None:
+        raise DataError(f"{settings.source} 没有 {day} 的已发布报告；未替换输出文件")
+    # Export one report date. Tracking is a separate snapshot through its stated cutoff.
+    data["dates"] = [report["day"]] if report else []
+    histories = {}
+    if report:
+        codes = {c["code"] for c in report["candidates"]}
+        for code in sorted(codes):
+            rows = db.rows(
+                select(bars.c.day, bars.c.close, bars.c.adj)
+                .where(bars.c.source == settings.source, bars.c.code == code, bars.c.day <= report["day"])
+                .order_by(bars.c.day.desc()).limit(65)
+            )
+            histories[code] = list(reversed(rows))
+    observations = tracking(db, settings, as_of=report["day"] if report else None)
+    if report:
+        observations["method"] += f" 观察数据截止于 {report['day']}。"
+    payload = {"dashboard": data, "tracking": observations, "histories": histories, "exported_at": now().isoformat()}
+    environment = Environment(loader=FileSystemLoader(ASSETS / "templates"), autoescape=select_autoescape(["html"]))
+    text = environment.get_template("index.html").render(
+        source=settings.source,
+        offline=True,
+        nonce=secrets.token_urlsafe(24),
+        exported_at=now().strftime("%Y-%m-%d %H:%M（北京时间）"),
+        css=(ASSETS / "static/style.css").read_text(),
+        javascript=(ASSETS / "static/app.js").read_text(),
+        snapshot=script_json(payload),
+    )
+    destination = Path(output or Path(settings.html_report_dir) / f"{settings.source}-latest.html").resolve()
+    if destination.suffix.lower() != ".html":
+        raise DataError("HTML 输出文件必须以 .html 结尾")
+    atomic_write(destination, text)
+    return {"status": "success", "source": settings.source, "day": report["day"] if report else None,
+            "report_ready": report is not None, "path": str(destination)}
+
+
+def export_published(db, settings, day):
+    """Publish a dated copy and a latest copy; callers handle I/O independently of DB success."""
+    folder = Path(settings.html_report_dir)
+    result = export_html(db, settings, day, folder / f"{settings.source}-{day}.html")
+    # Reuse identical bytes so both copies represent the same snapshot.
+    atomic_write((folder / f"{settings.source}-latest.html").resolve(), Path(result["path"]).read_text())
+    return result

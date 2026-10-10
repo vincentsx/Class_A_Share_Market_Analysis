@@ -31,6 +31,10 @@ def main():
     serve.add_argument("--port", type=int, default=8000)
     commands.add_parser("worker", help="运行盘后及晚间定时任务")
     commands.add_parser("track", help="输出已保存信号的观察统计")
+    html = commands.add_parser("export-html", help="导出可双击打开的离线HTML报告")
+    html.add_argument("--date", help="指定已有报告日期，默认最新报告或采集状态")
+    html.add_argument("--output", help="输出HTML路径，默认 data/html/数据源-latest.html")
+    html.add_argument("--source", choices=("baostock", "tushare", "demo"), help="只选择导出来源，不修改配置")
     watch = commands.add_parser("watch", help="管理自选股")
     watch.add_argument("action", choices=("add", "remove", "list"))
     watch.add_argument("code", nargs="?")
@@ -77,6 +81,14 @@ def main():
             return
         elif args.command == "track":
             result = tracking(db, settings)
+        elif args.command == "export-html":
+            from dataclasses import replace
+
+            from .html_export import export_html
+
+            if args.source:
+                settings = replace(settings, source=args.source)
+            result = export_html(db, settings, args.date, args.output)
         else:
             if args.action == "list":
                 result = db.rows(select(watchlist))

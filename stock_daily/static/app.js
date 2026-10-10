@@ -8,8 +8,25 @@ const dateLabel = (day) => day ? `${day.slice(0,4)}.${day.slice(4,6)}.${day.slic
 const timeLabel = (value) => value ? new Intl.DateTimeFormat("zh-CN", {timeZone:"Asia/Shanghai",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false}).format(new Date(value)) : "—";
 const emptyRow = (text, columns) => `<tr><td colspan="${columns}" class="empty-row">${esc(text)}</td></tr>`;
 let state = null, strategy = "all", currentView = "overview", refreshId = 0;
+const offlineElement = document.getElementById("offline-snapshot");
+const OFFLINE = offlineElement ? JSON.parse(offlineElement.textContent) : null;
+
+if (OFFLINE) {
+  $("add-watch").hidden = true;
+  $("date-select").disabled = true;
+  $("refresh").textContent = "↻ 重读快照";
+}
 
 async function api(path, options = {}) {
+  if (OFFLINE) {
+    if (options.method && options.method !== "GET") throw new Error("离线报告为只读快照，请在本地服务中管理自选股。");
+    const url = new URL(path, "https://snapshot.invalid");
+    if (url.pathname === "/api/dashboard") return structuredClone(OFFLINE.dashboard);
+    if (url.pathname === "/api/tracking") return structuredClone(OFFLINE.tracking);
+    const match = url.pathname.match(/^\/api\/stocks\/([^/]+)\/history$/);
+    if (match) return structuredClone(OFFLINE.histories[decodeURIComponent(match[1])] || []);
+    throw new Error("离线快照中没有该数据。");
+  }
   const response = await fetch(path, options);
   if (!response.ok) {
     let detail = `请求失败 (${response.status})`;
@@ -36,14 +53,16 @@ async function load(day = "") {
     $("date-select").innerHTML = data.dates.length ? data.dates.map((d) => `<option value="${d}">${dateLabel(d)} 复盘</option>`).join("") : '<option value="">暂无报告</option>';
     if (data.report) {
       $("date-select").value = data.report.day;
-      const older = data.report.day !== data.today;
+      const older = data.report.day !== (OFFLINE ? new Date().toLocaleDateString("sv-SE", {timeZone:"Asia/Shanghai"}).replaceAll("-", "") : data.today);
       const recentFailure = data.runs.find((r) => r.kind === "daily" && r.status === "failed" && r.day >= data.report.day);
       message(recentFailure ? `最近采集失败：${recentFailure.message}。当前显示 ${dateLabel(data.report.day)} 的已保存报告。` : older ? `当前显示 ${dateLabel(data.report.day)} 的历史报告，数据截止于该日。` : "", !!recentFailure);
       renderReport(data);
       renderWatch(data.watchlist);
     } else {
       const failure = data.runs.find((r) => r.status === "failed");
-      message(failure ? `最近任务失败：${failure.message}` : "", !!failure);
+      const active = data.runs.find((r) => r.kind === "daily" && r.status === "running");
+      const progress = data.source === "baostock" && data.factor_histories ? `；已完成 ${data.factor_histories} 只股票的历史复权核对` : "";
+      message(active ? `${OFFLINE ? "导出时正在采集" : "正在采集"} ${dateLabel(active.day)} 的${data.source === "demo" ? "合成示例" : "真实行情"}：${active.message}${progress}。${OFFLINE ? "本文件尚无已发布报告，采集完成后需重新导出。" : "完成数据校验后将显示报告。"}` : failure ? `最近任务失败：${failure.message}` : "", !active && !!failure);
     }
     if (currentView === "tracking") await loadTracking();
   } catch (error) { message(error.message, true); }
@@ -52,7 +71,7 @@ async function load(day = "") {
 
 function renderReport(data) {
   const report = data.report, m = report.market, q = report.quality;
-  $("market-date").textContent = `${dateLabel(report.day)} · ${m.count} 只当日有行情股票`;
+  $("market-date").textContent = `${dateLabel(report.day)} · ${m.count} 只当日有行情股票${data.source === "baostock" ? " · 沪深A股，不含北交所" : ""}`;
   const cards = [
     ["沪深300", pct(m.benchmark_pct), color(m.benchmark_pct), `近20日 ${pct(m.benchmark_return20)}`],
     ["上涨股票占比", `${num(m.up_ratio,1)}<small>%</small>`, "", `${m.up} 上涨 / ${m.down} 下跌 / ${m.flat} 平盘`],
@@ -76,7 +95,10 @@ function renderReport(data) {
   ].map(([label,value]) => `<div class="quality-line"><span>${label}</span><b>${esc(value)}</b></div>`).join("");
   $("schedule-time").textContent = data.schedule_time;
   $("candidate-count").textContent = report.candidates.length;
-  $("download").href = `/api/report/${report.day}/download`;
+  if (OFFLINE) {
+    $("download").href = URL.createObjectURL(new Blob([JSON.stringify(report,null,2)], {type:"application/json"}));
+    $("download").download = `${data.source}-${report.day}.json`;
+  } else $("download").href = `/api/report/${report.day}/download`;
   renderCandidates();
   const events = report.events.filter((e) => e.tags.length).slice(0,8);
   $("event-list").innerHTML = events.length ? events.map((e) => `<div class="list-entry">${eventLink(e)}<p>${esc(e.code)} · ${dateLabel(e.day)} · ${esc(e.tags.join(" / "))}</p></div>`).join("") : `<div class="list-entry muted">${report.event_status === "available" ? "已采集公告中暂无命中关键词的标题；不代表没有风险。" : "公告未启用或不可用，暂无法完成事件风险核验。"}</div>`;
@@ -95,7 +117,7 @@ function renderCandidates() {
   $("candidate-table").innerHTML = candidates.length ? candidates.map((c) => `<tr><td><b>${esc(c.name)}</b><small>${esc(c.code)}</small></td><td><span class="signal-tag ${esc(c.strategy)}">${esc(c.label)}</span></td><td>${num(c.close)}<small class="${color(c.pct)}">${pct(c.pct)}</small></td><td class="${color(c.relative20)}">${c.relative20 > 0 ? "+" : ""}${num(c.relative20)} pp</td><td>${num(c.volume_ratio)} ×</td><td class="muted">${esc(c.industry)}</td><td><button class="row-detail" data-code="${esc(c.code)}" data-rule="${esc(c.strategy)}">查看依据 ↗</button></td></tr>`).join("") : emptyRow(state.report.candidates.length ? "没有符合当前搜索条件的信号" : "今天没有满足规则的观察信号；保持筛选标准，等待新的变化。",7);
 }
 function renderWatch(items) {
-  $("watch-table").innerHTML = items.length ? items.map((w) => `<tr><td><b>${esc(w.name || w.code)}</b><small>${esc(w.code)}</small><small>${esc(w.note)}</small></td><td>${num(w.close)}<small class="${color(w.pct)}">${pct(w.pct)}</small></td><td>${w.available ? esc(w.trend) : "历史不足"}</td><td><ul class="alert-list">${w.alerts.length ? w.alerts.map((a) => `<li>${esc(a)}</li>`).join("") : '<li class="quiet">当前检查项未触发提醒</li>'}</ul></td><td><button class="remove-watch" data-code="${esc(w.code)}">移除</button></td></tr>`).join("") : emptyRow("添加自选股，持续观察你关注的变化。",5);
+  $("watch-table").innerHTML = items.length ? items.map((w) => `<tr><td><b>${esc(w.name || w.code)}</b><small>${esc(w.code)}</small><small>${esc(w.note)}</small></td><td>${num(w.close)}<small class="${color(w.pct)}">${pct(w.pct)}</small></td><td>${w.available ? esc(w.trend) : "历史不足"}</td><td><ul class="alert-list">${w.alerts.length ? w.alerts.map((a) => `<li>${esc(a)}</li>`).join("") : '<li class="quiet">当前检查项未触发提醒</li>'}</ul></td><td>${OFFLINE ? "" : `<button class="remove-watch" data-code="${esc(w.code)}">移除</button>`}</td></tr>`).join("") : emptyRow("添加自选股，持续观察你关注的变化。",5);
 }
 async function showDetail(code, rule) {
   const candidate = state.report.candidates.find((c) => c.code === code && c.strategy === rule);
@@ -141,10 +163,13 @@ $("mobile-method").addEventListener("click",() => $("method-dialog").showModal()
 $("add-watch").addEventListener("click",() => {$("watch-error").textContent="";$("watch-dialog").showModal();});
 document.querySelectorAll(".close-dialog").forEach((b) => b.addEventListener("click",() => b.closest("dialog").close()));
 document.querySelectorAll("dialog").forEach((d) => d.addEventListener("click",(e) => {if(e.target===d){const r=d.getBoundingClientRect();if(e.clientX<r.left||e.clientX>r.right||e.clientY<r.top||e.clientY>r.bottom)d.close();}}));
-$("watch-form").addEventListener("submit",async (e) => {
+$("watch-form")?.addEventListener("submit",async (e) => {
   e.preventDefault(); const form=e.target, button=form.querySelector("button[type=submit]"), fields=new FormData(form);button.disabled=true;
   try {await api("/api/watchlist",{method:"POST",headers:{"Content-Type":"application/json","Authorization":`Bearer ${fields.get("key")}`},body:JSON.stringify({code:String(fields.get("code")).trim().toUpperCase(),note:fields.get("note")})});form.reset();$("watch-dialog").close();await load(state.report.day);}
   catch(error){$("watch-error").textContent=error.message;}finally{button.disabled=false;}
 });
 $("watch-table").addEventListener("click",async (e) => {const b=e.target.closest(".remove-watch");if(!b)return;const key=window.prompt(`移除 ${b.dataset.code}：请输入 APP_API_KEY`);if(!key)return;try{await api(`/api/watchlist/${b.dataset.code}`,{method:"DELETE",headers:{Authorization:`Bearer ${key}`}});await load(state.report.day);}catch(error){message(error.message,true);}});
 load();
+setInterval(() => {
+  if (!OFFLINE && state && !state.report && state.runs.some((r) => r.kind === "daily" && r.status === "running")) load();
+}, 15000);

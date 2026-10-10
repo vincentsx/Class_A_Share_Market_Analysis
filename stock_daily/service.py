@@ -1,11 +1,11 @@
 from collections import defaultdict
 from statistics import mean
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from .analysis import signal_outcome, tag_events
 from .config import now
-from .db import bars, reports, runs, sessions, signals, trading_days, watchlist
+from .db import bars, provider_cache, reports, runs, sessions, signals, trading_days, watchlist
 
 
 def dashboard(db, settings, day=None):
@@ -30,6 +30,10 @@ def dashboard(db, settings, day=None):
         "schedule_time": settings.schedule_time,
         "announcement_time": settings.announcement_time,
     }
+    if settings.source == "baostock":
+        data["factor_histories"] = db.rows(
+            select(func.count().label("count")).select_from(provider_cache).where(provider_cache.c.source == "baostock")
+        )[0]["count"]
     if report is None:
         data["watchlist"] = [{**w, "available": False, "alerts": ["尚无分析报告"]} for w in watched]
         return data
@@ -83,10 +87,10 @@ def dashboard(db, settings, day=None):
     return data
 
 
-def tracking(db, settings, limit=200):
+def tracking(db, settings, limit=200, as_of=None):
     saved = db.rows(
         select(signals)
-        .where(signals.c.source == settings.source)
+        .where(signals.c.source == settings.source, signals.c.day <= as_of if as_of else True)
         .order_by(signals.c.day.desc(), signals.c.code)
         .limit(limit)
     )
@@ -95,7 +99,7 @@ def tracking(db, settings, limit=200):
     earliest = min(s["day"] for s in saved)
     latest = db.rows(
         select(sessions.c.day)
-        .where(sessions.c.source == settings.source)
+        .where(sessions.c.source == settings.source, sessions.c.day <= as_of if as_of else True)
         .order_by(sessions.c.day.desc())
         .limit(1)
     )[0]["day"]
@@ -117,6 +121,7 @@ def tracking(db, settings, limit=200):
         .where(
             bars.c.source == settings.source,
             bars.c.day >= earliest,
+            bars.c.day <= latest,
             bars.c.code.in_({s["code"] for s in saved}),
         )
         .order_by(bars.c.day)
@@ -155,4 +160,5 @@ def tracking(db, settings, limit=200):
         "items": items,
         "summary": summary,
         "method": f"最近最多{limit}个已发布信号；收盘到收盘、未扣费，不模拟成交。重叠信号不视为独立样本。",
+        "as_of": latest,
     }

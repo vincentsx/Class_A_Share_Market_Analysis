@@ -3,9 +3,25 @@ set -euo pipefail
 project_dir="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$project_dir"
 if [[ ! -x .venv/bin/python ]]; then
-  python3 -m venv .venv
+  runtime_python=""
+  for candidate in python3.12 python3.11 python3; do
+    if command -v "$candidate" >/dev/null 2>&1 && "$candidate" -c 'import sys; assert sys.version_info >= (3, 11)' >/dev/null 2>&1; then
+      runtime_python="$candidate"
+      break
+    fi
+  done
+  if [[ -z "$runtime_python" ]]; then
+    echo "需要 Python 3.11+。可用 uv：uv python install 3.12 && uv venv --seed --python 3.12 .venv"
+    exit 1
+  fi
+  "$runtime_python" -m venv .venv
 fi
-if ! .venv/bin/python -c 'import fastapi, sqlalchemy, httpx, jinja2, dotenv, psycopg' >/dev/null 2>&1; then
+if ! .venv/bin/python -c 'import sys; assert sys.version_info >= (3, 11)' >/dev/null 2>&1; then
+  echo "现有 .venv 的 Python 版本过低，请用 Python 3.11+ 重建虚拟环境；.env 和 data 可保留。"
+  exit 1
+fi
+if ! .venv/bin/python -c 'import fastapi, sqlalchemy, httpx, jinja2, dotenv, psycopg, baostock, akshare' >/dev/null 2>&1; then
+  .venv/bin/python -m ensurepip --upgrade >/dev/null
   .venv/bin/python -m pip install -r requirements.txt
 fi
 if [[ ! -f .env ]]; then

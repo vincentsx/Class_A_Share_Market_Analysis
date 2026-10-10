@@ -14,6 +14,21 @@ from .providers import DataError, make_provider, parse_day
 logger = logging.getLogger(__name__)
 
 
+def publish_html(db, settings, day, identifier):
+    if not settings.export_html:
+        return None
+    try:
+        from .html_export import export_published
+
+        return export_published(db, settings, day)
+    except Exception:
+        # The validated DB report is already published; a filesystem error must
+        # not relabel it as a failed data acquisition or replace a previous HTML.
+        logger.exception("报告已保存，但离线HTML导出失败")
+        db.finish_run(identifier, "success", "报告已保存；HTML导出失败，请运行 export-html 重试")
+        return {"status": "failed", "message": "报告已保存，HTML导出失败"}
+
+
 def validate_batch(batch, universe, settings):
     codes = [r["code"] for r in batch.bars]
     if not codes or len(set(codes)) != len(codes):
@@ -103,7 +118,7 @@ def run_daily(db, settings, day=None, force=False, provider=None):
     active_provider = provider
     try:
         with db.lock(source):
-            active_provider = active_provider or make_provider(settings)
+            active_provider = active_provider or make_provider(settings, db)
             start = (parse_day(day) - timedelta(days=max(220, settings.history_sessions * 2))).strftime(
                 "%Y%m%d"
             )
@@ -136,13 +151,14 @@ def run_daily(db, settings, day=None, force=False, provider=None):
             today_rows, today = None, None
             for completed, target in enumerate(needed, 1):
                 batch = active_provider.fetch_day(target)
-                quality = validate_batch(batch, universe, settings)
+                batch_universe = batch.universe if batch.universe is not None else universe
+                quality = validate_batch(batch, batch_universe, settings)
                 snapshot = {
                     "source": source,
                     "day": target,
                     "quality": quality,
                     "benchmark": batch.benchmark,
-                    "universe": universe,
+                    "universe": batch_universe,
                     "events": batch.events,
                     "event_status": batch.event_status,
                     "acquired_at": now().isoformat(),
@@ -209,7 +225,11 @@ def run_daily(db, settings, day=None, force=False, provider=None):
                         )
                     )
             db.finish_run(identifier, "success", f"报告已生成，{len(report['candidates'])} 个观察信号")
-            return {"status": "success", "day": day, "candidates": len(report["candidates"])}
+            result = {"status": "success", "day": day, "candidates": len(report["candidates"])}
+            html = publish_html(db, settings, day, identifier)
+            if html:
+                result["html"] = html
+            return result
     except Exception as error:
         message = (
             str(error)
@@ -237,7 +257,7 @@ def refresh_events(db, settings, day=None, provider=None):
             if not saved:
                 db.finish_run(identifier, "skipped", "当天无行情快照，未补查公告")
                 return {"status": "skipped"}
-            active_provider = active_provider or make_provider(settings)
+            active_provider = active_provider or make_provider(settings, db)
             events, status = active_provider.events(day)
             # Events are displayed dynamically, preserving the original signal evidence at creation time.
             if status == "unavailable":
@@ -252,7 +272,11 @@ def refresh_events(db, settings, day=None, provider=None):
                     )
                 )
             db.finish_run(identifier, "success", f"公告状态 {status}，共 {len(events)} 条")
-            return {"status": "success", "count": len(events)}
+            result = {"status": "success", "count": len(events)}
+            html = publish_html(db, settings, day, identifier)
+            if html:
+                result["html"] = html
+            return result
     except Exception as error:
         db.finish_run(identifier, "failed", str(error) if isinstance(error, DataError) else "公告补查失败")
         alert(settings, f"{day} 公告补查失败")

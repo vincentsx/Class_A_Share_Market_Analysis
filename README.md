@@ -4,29 +4,118 @@
 
 ## 本地启动
 
-需要 Python 3.10+。Ubuntu 缺少 venv 时先安装 `python3-venv`。
+需要 Python 3.11+（推荐3.12，AKShare要求3.11以上）。Ubuntu 缺少 venv 时先安装对应版本的 `python3-venv`。只有旧版Python时可先执行 `uv python install 3.12` 和 `uv venv --seed --python 3.12 .venv`。
 
 ```bash
 bash scripts/run_local.sh
 ```
 
-打开 <http://127.0.0.1:8000>。脚本会初始化合成示例、启动网页和定时 worker；按 Ctrl+C 结束。首次创建的 `.env` 带有随机 `APP_API_KEY`，网页添加和移除自选股需要此密钥。
+打开 <http://127.0.0.1:8000>。脚本会启动网页和定时 worker；按 Ctrl+C 结束。首次创建的 `.env` 带有随机 `APP_API_KEY`，网页添加和移除自选股需要此密钥。首次真实数据初始化需在另一个终端执行下面的盘后采集命令。
 
-**默认是合成示例模式。示例行情、公司名称、公告和工作日历都不是实际市场数据。** 示范近30日复盘，展示完整流程；示例信号的统计不能证明策略有效。
+**新配置默认使用免费 BaoStock 行情和 AKShare 公告，无需 Tushare Token。** 已有 `.env` 不会被启动脚本自动覆盖，需自行修改 `DATA_SOURCE`。免费模式覆盖 BaoStock 的沪深A股，不含北交所、B股、ETF和债券。页面明确显示数据来源和范围。
 
 手动安装和运行：
 
 ```bash
-python3 -m venv .venv
+python3.12 -m venv .venv
 .venv/bin/pip install -r requirements.txt
 cp .env.example .env
-.venv/bin/python -m stock_daily demo
+.venv/bin/python -m stock_daily run --date 20261009
 .venv/bin/python -m stock_daily serve
 ```
 
 另开终端运行 `.venv/bin/python -m stock_daily worker` 才会执行定时任务。手动复制配置时可自行设置 `APP_API_KEY`；没有设置密钥，网页只允许读取，自选股仍可用 CLI 管理。
 
-## 接入真实 A 股行情
+## 本地真实运行一次
+
+以下步骤适用于已经安装依赖的当前项目。保留已有 `.env`，确认 `DATA_SOURCE=baostock`，即可使用免费真实行情，无需 Tushare 积分。
+
+### 1. 运行盘后分析
+
+如果网页已经显示采集任务正在运行，等待该任务完成，不要重复启动。否则在终端执行：
+
+```bash
+cd /home/vincent/code/ai_gaoqian
+.venv/bin/python -m stock_daily run --date 20261009
+```
+
+`20261009` 是示例日期，请替换为已经收盘的实际交易日。首次运行会补齐最近100个交易日，并初始化全市场复权记录，耗时较长；后续运行会利用已保存的历史数据。命令执行期间会在终端输出进度，完成后查看任务结果是否成功。
+
+### 2. 查看进度和结果
+
+网页服务已启动时，打开 <http://127.0.0.1:8000> 查看任务进度和报告。尚未启动时，另开终端执行：
+
+```bash
+cd /home/vincent/code/ai_gaoqian
+.venv/bin/python -m stock_daily serve
+```
+
+对于此前已在后台启动、日志写入 `data/initial_free_run.log` 的首次采集任务，可这样查看日志：
+
+```bash
+cd /home/vincent/code/ai_gaoqian
+tail -f data/initial_free_run.log
+```
+
+在这个日志查看终端按 Ctrl+C 只会退出 `tail`，后台采集会继续运行。直接运行分析命令的终端会显示自身日志，并不会默认写入该文件。
+
+### 3. 打开本地 HTML
+
+配置 `EXPORT_HTML=true` 时，分析成功后会自动更新 `data/html/baostock-latest.html`，可直接双击打开。若报告尚未发布，该文件可能只显示采集状态；报告生成后重新打开文件查看结果。
+
+也可以在分析完成后手动导出：
+
+```bash
+cd /home/vincent/code/ai_gaoqian
+.venv/bin/python -m stock_daily export-html
+```
+
+### 4. 再次运行
+
+以后按第1步的命令替换日期即可。当天已有报告时会跳过重复分析；需要重新采集当天数据并替换当天报告与信号时使用：
+
+```bash
+.venv/bin/python -m stock_daily run --date 20261009 --force
+```
+
+`--force` 用于修正数据或重算，不用于并行启动正在运行的任务。
+
+## 免费真实行情与公告
+
+在 `.env` 中配置：
+
+```dotenv
+DATA_SOURCE=baostock
+ENABLE_ANNOUNCEMENTS=true
+FREE_REQUEST_INTERVAL=0.3
+FREE_REQUEST_TIMEOUT=90
+```
+
+运行采集，并在修改配置后重启网页和 worker：
+
+```bash
+.venv/bin/python -m stock_daily run
+# 非交易日指定已经收盘的实际交易日期
+.venv/bin/python -m stock_daily run --date 20261009
+```
+
+首次补齐最近100个交易日，并逐只初始化从上市日至报告日的复权记录，可能需要较长时间；每100只输出复权进度。复权记录保存在数据库 `provider_cache`，中断后可继续；后续按日期批量更新除权记录、行情和停牌状态。不会将“当日没有除权记录”误当成所有股票的复权因子为1。后复权因子用于原价×因子的指标计算，量和额直接采用接口的股、元单位。
+
+大接口比单只股票接口慢。每个SDK操作有总超时，失败重连最多3次；可将 `FREE_REQUEST_TIMEOUT` 调至300秒以内。超时、空行情、日期不符、分页失败或覆盖不足都不会发布报告，也不会自动改用示例数据。免费接口不承诺可用性或全市场完整性，具体运行结果以任务记录为准。
+
+AKShare的 `stock_notice_report` 获取指定日期的公告标题、链接和日期；仅采集当前报告日公告，历史行情补齐不逐日抓取公告。SDK操作也受总超时限制。接口没有精确发布时间，因此本系统留空该字段。启用后21:30补查；接口不可用显示“公告未核验”，不会宣称没有风险。标题提示不读取正文，也不判断利好利空。
+
+只读连通性检查不会写入行情或报告：
+
+```bash
+PYTHONPATH=. .venv/bin/python scripts/check_free_data.py --date 20261009
+# 额外检查全市场基础信息和批量日线，可能明显较慢
+PYTHONPATH=. .venv/bin/python scripts/check_free_data.py --date 20261009 --bulk
+```
+
+检查单只股票成功仅代表对应接口可用，不能证明全市场初始化成功。报告发布仍须满足下面的数据质量校验。参考：[BaoStock](https://www.baostock.com/)、[AKShare公告接口](https://akshare.akfamily.xyz/data/stock/stock.html#id203)。
+
+## 可选 Tushare
 
 在 `.env` 中修改：
 
@@ -52,6 +141,31 @@ ENABLE_ANNOUNCEMENTS=false
 
 接口参考：[日线](https://tushare.pro/document/2?doc_id=27)、[每日指标](https://tushare.pro/document/2?doc_id=32)、[股票列表](https://tushare.pro/document/2?doc_id=25)、[交易日历](https://tushare.pro/document/2?doc_id=26)、[停复牌](https://tushare.pro/document/2?doc_id=214)、[公告](https://tushare.pro/document/2?doc_id=176)、[HTTP API](https://tushare.pro/document/1?doc_id=40)。使用和展示数据时遵循数据提供方的授权范围。
 
+## 合成示例
+
+在 `.env` 设置 `DATA_SOURCE=demo`，执行 `.venv/bin/python -m stock_daily demo` 并重启服务，可生成近30日示范报告。全部行情、公司名称、公告和工作日历都是合成数据；统计不能证明策略有效。切回 `baostock` 会读取独立的真实数据区。
+
+## 本地 HTML 文件
+
+无需服务器即可双击打开导出的单个HTML。样式、报告数据、候选股近65日图表和观察统计均内嵌，不使用CDN，也不发起行情或后台请求。搜索、筛选、详情图表和导航可离线操作；自选股管理在本地服务或CLI中完成，HTML为只读。Token和管理密钥不写入文件。
+
+```bash
+# 当前来源的最新复盘，默认输出 data/html/数据源-latest.html
+.venv/bin/python -m stock_daily export-html
+# 导出特定日期到指定文件；只使用截至该日的价格和观察统计
+.venv/bin/python -m stock_daily export-html --date 20261009 --output data/html/my-report.html
+# 预览完整示例界面，明确标记为合成数据；不修改主数据源
+.venv/bin/python -m stock_daily export-html --source demo --output data/html/demo-preview.html
+```
+
+真实源尚未发布报告时，最新导出会明确显示采集状态，不会代入示例行情。指定日期没有报告会报错，并保留原输出文件。文件标注导出时间和数据日期，已打开的文件不会自动获取行情；更新后需重新打开。
+
+`.env` 设置 `EXPORT_HTML=true`（新配置默认开启）和 `HTML_REPORT_DIR=./data/html`，盘后报告与晚间公告更新成功后会自动生成 `数据源-YYYYMMDD.html` 和 `数据源-latest.html`。HTML写入失败会保留已发布的数据库报告，在任务记录提示，可通过CLI重试。修改配置后重启worker。
+
+若首次采集已经在旧进程中运行，可另外等待它完成后导出：`PYTHONPATH=. .venv/bin/python scripts/export_when_ready.py --date 20261009`。该脚本期间更新状态快照，等待最长6小时；采集失败会显示失败状态，不生成伪造行情报告。
+
+Tushare官方权限表列出的基础非复权日线门槛为120积分，100积分不足；提高到120也不意味着拥有本系统所需的复权、每日指标、基准和公告权限。主数据源可继续使用 `baostock`，Token留在 `.env` 中备用。[权限说明](https://tushare.pro/document/2?doc_id=290)
+
 ## 每日报告
 
 - 市场：沪深300日涨跌、上涨比例、成交额相对此前20日均值、站上20日均线的样本占比。
@@ -60,7 +174,7 @@ ENABLE_ANNOUNCEMENTS=false
 - 自选：20日均线跌破、单日明显下跌、放量下跌、标题风险关键词提醒。
 - 跟踪：已发布信号后5/10/20个交易日的复权收盘变化、期间相对信号收盘的最大不利变化、首个收盘失效日。
 
-规则版本 `swing-v1.0`：股票须有连续65个交易日数据，默认当日成交额≥5000万元；排除名称含ST或退市标记、最近20日复权因子变化的股票；行业位于相对强度前1/3且跑赢沪深300。个股收盘>MA20>MA60且20日跑赢沪深300。
+规则版本 `swing-v1.0`：股票须有连续65个交易日数据，默认当日成交额≥5000万元；排除名称含ST或退市标记、BaoStock当日ST标记、最近20日复权因子变化的股票；缺失行业分类的股票不参与行业筛选。行业位于相对强度前1/3且跑赢沪深300。个股收盘>MA20>MA60且20日跑赢沪深300。
 
 放量突破：收盘突破此前20日最高价，成交量≥此前20日均量的1.5倍。回调转强：前一日收盘在当时MA20的±3%以内，此前3日均量小于其前20日均量，当日收盘转强并高于MA20，MA20较5日前上升。阈值为待验证假设，没有做参数优化或交易优势证明。
 
@@ -72,7 +186,7 @@ ENABLE_ANNOUNCEMENTS=false
 
 ## 数据质量和定时任务
 
-行情须满足日期一致、代码唯一、数值有限、价格/量/额/复权因子为正、OHLC一致、复权和每日指标齐备、基准存在。扣除全天停牌后默认覆盖率至少98%，未达到则拒绝发布。达到阈值但仍有缺失时明确显示“部分行情缺失”。可将 `MIN_COVERAGE=1` 设为严格完整。
+行情须满足日期一致、代码唯一、数值有限、价格/量/额/复权因子为正、OHLC一致、复权齐备、基准存在。BaoStock PE/PB等可为空；Tushare须有对应每日指标记录。扣除全天停牌后默认覆盖率至少98%，未达到则拒绝发布。BaoStock覆盖率的分母是其基础信息中的沪深A股，不是包含北交所的全部A股。达到阈值但仍有缺失时明确显示“部分行情缺失”。可将 `MIN_COVERAGE=1` 设为严格完整。
 
 当天行情、元信息、报告和信号在同一数据库事务中发布；失败保留之前的已发布结果，成功采集的历史可用于断点续采。示例和真实数据按 `source` 完全隔离。自选股列表共用，切换数据源后会重新分析，示例添加的代码可自行移除。
 
@@ -97,8 +211,8 @@ worker 使用 `Asia/Shanghai`，默认17:30盘后任务、21:30公告补查（`S
 
 ```bash
 docker compose build
-# 示例模式首次初始化；真实模式换成 python -m stock_daily run
-docker compose run --rm app python -m stock_daily demo
+# 首次初始化（非交易日用 --date 指定已收盘的交易日）
+docker compose run --rm app python -m stock_daily run --date 20261009
 docker compose up -d
 docker compose logs -f worker
 ```
@@ -123,6 +237,6 @@ SQLite和PostgreSQL数据库不会自动迁移数据。建议对持久数据库�
 node --check stock_daily/static/app.js
 ```
 
-测试涵盖复权、指标窗口、停牌区间、单位转换、分页、防止重复运行、失败原子性、断点续采、来源隔离、写入鉴权与调度。真实Tushare接口需要用户Token和权限，测试使用合成数据与HTTP mock。
+测试涵盖复权、指标窗口、停牌区间、两种真实源的单位转换、复权缓存和增量更新、分页截断、SDK超时重连、防止重复运行、失败原子性、断点续采、来源隔离、写入鉴权与调度。自动化测试使用合成数据、HTTP mock和SDK替身，不等同于真实接口全量验证。实时连通性检查使用上述脚本。
 
-目录：`providers.py` 数据源；`pipeline.py` 采集校验发布；`analysis.py` 指标与信号；`service.py` 报告和观察视图；`web.py` API；`scheduler.py` 定时；`db.py` 存储；`static/` 和 `templates/` 页面。
+目录：`providers.py` Tushare/示例源；`free_provider.py` 免费数据源；`sdk_client.py` SDK进程与超时；`pipeline.py` 采集校验发布；`analysis.py` 指标与信号；`service.py` 报告和观察视图；`web.py` API；`scheduler.py` 定时；`db.py` 存储；`static/` 和 `templates/` 页面。

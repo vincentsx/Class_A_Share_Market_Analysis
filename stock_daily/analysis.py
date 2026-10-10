@@ -75,7 +75,8 @@ def build_report(settings, day, histories, day_sessions, universe, quality, even
             metrics.append({**metric, **stock})
     sectors = defaultdict(list)
     for metric in metrics:
-        sectors[metric["industry"]].append(metric)
+        if metric["industry"] != "未分类":
+            sectors[metric["industry"]].append(metric)
     industries = sorted(
         [
             {
@@ -102,6 +103,7 @@ def build_report(settings, day, histories, day_sessions, universe, quality, even
         if (
             metric["amount"] < settings.min_amount
             or "ST" in metric["name"].upper()
+            or metric.get("is_st", False)
             or "退" in metric["name"]
             or metric["corporate_action"]
             or metric["trend"] != "向上"
@@ -153,6 +155,7 @@ def build_report(settings, day, histories, day_sessions, universe, quality, even
         "day": day,
         "source": settings.source,
         "rule_version": RULE_VERSION,
+        "scope": "BaoStock 覆盖的沪深A股（不含北交所）" if settings.source == "baostock" else "当前数据源覆盖范围",
         "quality": quality,
         "event_status": event_status,
         "market": {

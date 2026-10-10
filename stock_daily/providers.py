@@ -33,6 +33,7 @@ class Batch:
     suspended: set[str]
     events: list[dict]
     event_status: str
+    universe: dict | None = None
 
 
 class TushareProvider:
@@ -324,5 +325,11 @@ class DemoProvider:
         return self.fetch_day(day).events, "demo"
 
 
-def make_provider(settings):
-    return DemoProvider(settings) if settings.source == "demo" else TushareProvider(settings)
+def make_provider(settings, db=None):
+    if settings.source == "demo":
+        return DemoProvider(settings)
+    if settings.source == "baostock":
+        from .free_provider import BaoStockProvider
+
+        return BaoStockProvider(settings, db=db)
+    return TushareProvider(settings)
