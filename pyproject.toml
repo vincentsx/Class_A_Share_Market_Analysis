@@ -1,0 +1,36 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "stock-daily"
+version = "0.1.0"
+description = "A股盘后复盘与候选信号跟踪"
+requires-python = ">=3.10"
+dependencies = [
+  "fastapi>=0.115,<1", "uvicorn>=0.30,<1", "SQLAlchemy>=2.0,<3",
+  "httpx>=0.27,<1", "Jinja2>=3.1,<4", "python-dotenv>=1,<2",
+  "psycopg[binary]>=3.2,<4",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8,<10", "ruff>=0.9,<1"]
+
+[project.scripts]
+stock-daily = "stock_daily.cli:main"
+
+[tool.setuptools.package-data]
+stock_daily = ["templates/*.html", "static/*.css", "static/*.js"]
+
+[tool.setuptools.packages.find]
+include = ["stock_daily*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 110
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]
+

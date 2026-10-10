@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>收盘之后 · A股研究台</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+</head>
+<body>
+  <aside class="sidebar">
+    <a class="brand" href="/"><span class="brand-mark">↗</span><span>收盘之后<small>STOCK DAILY</small></span></a>
+    <div class="workspace-label">研究工作台</div>
+    <nav aria-label="主导航">
+      <button class="nav-item active" data-view="overview"><span>◫</span>每日复盘</button>
+      <button class="nav-item" data-view="watch"><span>☆</span>我的自选</button>
+      <button class="nav-item" data-view="tracking"><span>⌁</span>信号跟踪</button>
+    </nav>
+    <div class="sidebar-note"><span class="status-dot"></span> 盘后研究 · 几天至几周<p>从数据到依据，<br>让每一次观察都有记录。</p></div>
+    <button id="method-button" class="method-button">规则与数据说明 <span>↗</span></button>
+    <div class="sidebar-footer">A 股 / 日频 <span>v0.1</span></div>
+  </aside>
+  <main>
+    <header class="topbar"><span class="breadcrumb">研究台 <span>/</span> <b id="breadcrumb">每日复盘</b></span>
+      <div class="topbar-right"><button id="mobile-method" class="row-detail" aria-label="查看规则与数据说明">规则</button><span id="source-chip" class="chip">{{ '合成示例' if source == 'demo' else 'Tushare' }}</span><span class="avatar">研</span></div></header>
+    <div class="content">
+      <div class="page-heading"><div><div class="eyebrow">AFTER THE CLOSE</div><h1 id="page-title">把今天的市场，看清楚。</h1><p id="subtitle">市场广度、行业强弱与值得跟踪的变化。</p></div>
+        <div class="heading-actions"><label class="sr-only" for="date-select">报告日期</label><select id="date-select"><option>加载中</option></select><button id="refresh" class="button secondary">↻ 刷新</button></div></div>
+      <div id="demo-banner" class="notice demo" hidden><b>示例工作台</b><span>全部行情、公司名称和公告均为合成数据；工作日历不代表真实交易日历。</span></div>
+      <div id="message" class="notice" role="status" hidden></div>
+      <div id="empty" class="empty-state" hidden><div class="empty-icon">◫</div><h2>第一份复盘，等待生成。</h2><p>在项目目录运行示例初始化，或配置真实数据源后运行盘后分析。</p><code>python -m stock_daily demo</code></div>
+      <div id="report-content" hidden>
+        <section id="view-overview" class="view">
+          <div class="section-heading"><h2>市场温度</h2><span id="market-date"></span></div>
+          <div id="market-cards" class="metric-grid"></div>
+          <div class="two-column">
+            <section class="panel"><div class="panel-heading"><div><h2>行业相对强度</h2><p>近20日相对沪深300 · 等权样本</p></div><span class="small-label">百分点</span></div><div id="sector-chart"></div></section>
+            <section class="panel quality-panel"><div class="panel-heading"><div><h2>今日数据检查</h2><p>先确认数据，再阅读结论。</p></div><span id="quality-chip" class="chip"></span></div><div id="quality-content"></div><div class="quality-foot">盘后运行 <b id="schedule-time"></b><span>北京时间</span></div></section>
+          </div>
+          <section class="panel candidates-panel"><div class="panel-heading"><div><h2>候选观察列表 <span id="candidate-count" class="count-badge"></span></h2><p>每条信号都有依据、风险与失效条件；按相对强度排序。</p></div><a id="download" class="text-link" href="#">导出日报 ↓</a></div>
+            <div class="table-toolbar"><div class="segmented" role="group" aria-label="信号类型"><button class="active" data-strategy="all">全部</button><button data-strategy="breakout">放量突破</button><button data-strategy="pullback">回调转强</button></div><label class="search"><span>⌕</span><input id="candidate-search" placeholder="搜索名称、代码或行业" aria-label="搜索候选股"></label></div>
+            <div class="table-wrap"><table><thead><tr><th>股票</th><th>观察类型</th><th>收盘 / 涨跌</th><th>20日相对强度</th><th>成交量倍数</th><th>行业</th><th></th></tr></thead><tbody id="candidate-table"></tbody></table></div><div class="table-foot">筛选结果用于后续观察。失效位置是判断条件，不是保证成交的止损价格。</div>
+          </section>
+          <div class="two-column bottom-panels"><section class="panel"><div class="panel-heading"><div><h2>公告观察</h2><p>按标题关键词提示，需核对公告原文。</p></div></div><div id="event-list"></div></section><section class="panel"><div class="panel-heading"><div><h2>任务记录</h2><p>采集进度、成功与失败都保留。</p></div></div><div id="run-list"></div></section></div>
+        </section>
+        <section id="view-watch" class="view" hidden><section class="panel"><div class="panel-heading"><div><h2>我的自选股</h2><p>关注趋势变化、放量下跌与新增公告。</p></div><button id="add-watch" class="button primary">＋ 添加自选</button></div><div class="table-wrap"><table><thead><tr><th>股票</th><th>收盘 / 涨跌</th><th>趋势</th><th>提醒</th><th></th></tr></thead><tbody id="watch-table"></tbody></table></div></section></section>
+        <section id="view-tracking" class="view" hidden><div class="notice"><b>信号观察统计</b><span>从信号当日收盘开始记录，未扣费、不模拟成交；存在停牌或数据缺失时不使用旧价格填充。</span></div><div id="tracking-cards" class="tracking-grid"></div><section class="panel"><div class="panel-heading"><div><h2>已保存的观察信号</h2><p id="tracking-method"></p></div></div><div class="table-wrap"><table><thead><tr><th>日期 / 股票</th><th>类型</th><th>5日变化</th><th>10日变化</th><th>20日变化</th><th>失效记录</th></tr></thead><tbody id="tracking-table"></tbody></table></div></section></section>
+      </div>
+      <footer class="page-footer"><span>收盘之后 · 可解释的每日研究</span><span>数据有截止时间，判断有失效条件。</span></footer>
+    </div>
+  </main>
+  <dialog id="detail-dialog"><div class="dialog-heading"><div><span id="detail-code" class="eyebrow"></span><h2 id="detail-title"></h2></div><button class="icon-button close-dialog" aria-label="关闭">×</button></div><div id="detail-body"></div></dialog>
+  <dialog id="watch-dialog"><div class="dialog-heading"><h2>添加自选股</h2><button class="icon-button close-dialog" aria-label="关闭">×</button></div><form id="watch-form"><label>股票代码<input name="code" placeholder="600000.SH" required pattern="[0-9]{6}\.(SH|SZ|BJ)"></label><label>观察备注<input name="note" placeholder="关注的变化或观察条件" maxlength="500"></label><label>管理密钥<input name="key" type="password" placeholder=".env 中的 APP_API_KEY" required autocomplete="off"></label><p class="muted">密钥仅用于本次请求。也可通过命令行管理自选股。</p><p id="watch-error" class="negative"></p><button class="button primary" type="submit">保存自选</button></form></dialog>
+  <dialog id="method-dialog"><div class="dialog-heading"><h2>规则与数据说明</h2><button class="icon-button close-dialog" aria-label="关闭">×</button></div><div class="method-content"><h3>放量突破</h3><p>行业位于相对强度前1/3且跑赢基准；个股收盘高于20日均线，20日均线高于60日均线；突破此前20日最高价；当日成交量至少为此前20日均量的1.5倍。</p><h3>趋势回调转强</h3><p>满足行业与趋势条件；前一日收盘靠近当时20日均线（±3%）；此前3日均量低于其前20日均量；当日收盘转强且20日均线较5日前上升。</p><h3>样本与数据口径</h3><p>股票须具备连续65个交易日行情，默认当日成交额至少5000万元；排除当前名称含ST或退市标记，以及最近20日复权因子发生变化的股票。价格指标使用原价乘复权因子，展示时转换回当前价格尺度。行业分类来自采集时股票基础信息。</p><h3>公告与跟踪</h3><p>公告功能需要单独接口权限，可在配置中启用。关键词提醒没有判断事件影响方向，也不读取公告正文。观察统计不包含佣金、滑点、涨跌停成交限制或组合仓位，不能作为策略回测收益。重叠信号不视为独立样本。</p><h3>运行方式</h3><p>定时采集通过独立 worker 运行；本地启动脚本会一并启动。北京时间17:30生成复盘，21:30补查公告。失败后每15分钟重试，当天最多4次。</p><p class="muted">规则版本 swing-v1.0 · 这些阈值为待验证的研究假设。</p></div></dialog>
+</body>
+</html>

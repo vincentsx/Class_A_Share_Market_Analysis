@@ -1,0 +1,29 @@
+# 与主 compose.yaml 叠加；首次设置 POSTGRES_PASSWORD 后保持不变。
+services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: stock_daily
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?请在.env设置POSTGRES_PASSWORD}
+      POSTGRES_DB: stock_daily
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U stock_daily -d stock_daily"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+  app:
+    environment:
+      DATABASE_URL: postgresql+psycopg://stock_daily:${POSTGRES_PASSWORD}@postgres/stock_daily
+    depends_on:
+      postgres:
+        condition: service_healthy
+  worker:
+    environment:
+      DATABASE_URL: postgresql+psycopg://stock_daily:${POSTGRES_PASSWORD}@postgres/stock_daily
+
+volumes:
+  postgres_data:
+

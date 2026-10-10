@@ -1,0 +1,33 @@
+services:
+  app:
+    build: .
+    image: stock-daily:local
+    env_file: .env
+    environment:
+      DATABASE_URL: sqlite:////app/data/stock_daily.db
+    ports:
+      - "127.0.0.1:8000:8000"
+    volumes:
+      - stock_data:/app/data
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=5)"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+  worker:
+    image: stock-daily:local
+    command: ["python", "-m", "stock_daily", "worker"]
+    env_file: .env
+    environment:
+      DATABASE_URL: sqlite:////app/data/stock_daily.db
+    volumes:
+      - stock_data:/app/data
+    depends_on:
+      app:
+        condition: service_healthy
+    restart: unless-stopped
+
+volumes:
+  stock_data:
+
