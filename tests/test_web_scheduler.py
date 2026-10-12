@@ -1,6 +1,8 @@
 from datetime import datetime, timedelta
 
+import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import select
 
 from stock_daily.config import SHANGHAI
 from stock_daily.db import runs
@@ -69,3 +71,61 @@ def test_successful_task_not_repeated(settings, db):
     identifier = db.start_run("demo", "20261009")
     db.finish_run(identifier, "success", "完成")
     assert not due(db, settings, datetime(2026, 10, 9, 20, 0, tzinfo=SHANGHAI), "daily", "17:30")
+
+
+def test_three_slots_complete_independently_and_no_late_midday_capture(settings, db):
+    identifier = db.start_run('demo', '20261009', 'midday')
+    db.finish_run(identifier, 'success', '午间完成')
+    current = datetime(2026, 10, 9, 15, 5, tzinfo=SHANGHAI)
+    assert due(db, settings, current, 'close', '15:05', '20:30')
+    assert not due(db, settings, current, 'midday', '11:35', '13:00')
+    identifier = db.start_run('demo', '20261009', 'close')
+    db.finish_run(identifier, 'success', '收盘完成')
+    current = current.replace(hour=20, minute=30)
+    assert due(db, settings, current, 'evening', '20:30')
+    assert not due(db, settings, current, 'close', '15:05', '20:30')
+
+
+def test_artifact_route_is_source_scoped_and_preserves_nonce_csp(populated, tmp_path):
+    from dataclasses import replace
+
+    from stock_daily.html_export import export_html
+
+    db, settings, _ = populated
+    settings = replace(settings, html_report_dir=str(tmp_path))
+    export_html(db, settings)
+    with TestClient(create_app(settings, db)) as client:
+        response = client.get('/artifacts/demo-latest.html')
+        assert response.status_code == 200
+        assert "script-src 'nonce-" in response.headers['content-security-policy']
+        assert client.get('/artifacts/baostock-latest.html').status_code == 404
+        assert client.get('/artifacts/.env').status_code == 404
+        assert client.get('/artifacts/demo-20261009-1135.png').status_code == 404
+
+
+def test_evening_reuses_published_report_and_retries_artifact_export(populated, tmp_path, monkeypatch):
+    from dataclasses import replace
+
+    from stock_daily.scheduler import run_evening
+
+    db, settings, _ = populated
+    settings = replace(settings, export_html=True, html_report_dir=str(tmp_path))
+    def unexpected_daily(*args, **kwargs):
+        raise AssertionError('已成功的日线不应重新采集')
+    monkeypatch.setattr('stock_daily.scheduler.run_daily', unexpected_daily)
+    result = run_evening(db, settings, '20261009')
+    assert result['status'] == 'success'
+    assert (tmp_path / 'demo-20261009-2030.html').read_bytes() == (tmp_path / 'demo-latest.html').read_bytes()
+    assert db.rows(select(runs).where(runs.c.kind == 'evening'))[-1]['status'] == 'success'
+
+
+def test_evening_failure_is_durable_and_not_treated_as_completed(settings, db, monkeypatch):
+    from stock_daily.providers import DataError
+    from stock_daily.scheduler import run_evening
+
+    def unavailable(*args, **kwargs):
+        raise DataError('日线数据未更新')
+    monkeypatch.setattr('stock_daily.scheduler.run_daily', unavailable)
+    with pytest.raises(DataError, match='未更新'):
+        run_evening(db, settings, '20261009')
+    assert db.rows(select(runs).where(runs.c.kind == 'evening'))[-1]['status'] == 'failed'

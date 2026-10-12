@@ -72,6 +72,7 @@ async function load(day = "") {
       message(active ? `${OFFLINE ? "导出时正在采集" : "正在采集"} ${dateLabel(active.day)} 的${data.source === "demo" ? "合成示例" : "真实行情"}：${active.message}${progress}。${OFFLINE ? "本文件尚无已发布报告，采集完成后需重新导出。" : "完成数据校验后将显示报告。"}` : failure ? `最近任务失败：${failure.message}` : "", !active && !!failure);
     }
     if (currentView === "tracking") await loadTracking();
+    window.REPORT_READY = true;
   } catch (error) { message(error.message, true); }
   finally { if (id === refreshId) $("refresh").disabled = false; }
 }
@@ -100,7 +101,7 @@ function renderReport(data) {
     ["停牌 / 缺失", `${q.suspended.length} / ${q.missing.length}`], ["公告检查", eventText],
     ["采集时间", timeLabel(report.acquired_at)],
   ].map(([label,value]) => `<div class="quality-line"><span>${label}</span><b>${esc(value)}</b></div>`).join("");
-  $("schedule-time").textContent = data.schedule_time;
+  $("schedule-time").textContent = `${data.midday_time || "11:35"} / ${data.schedule_time} / ${data.announcement_time}`;
   $("candidate-count").textContent = report.candidates.length;
   if (OFFLINE) {
     $("download").href = URL.createObjectURL(new Blob([JSON.stringify(report,null,2)], {type:"application/json"}));
@@ -110,7 +111,8 @@ function renderReport(data) {
   const events = report.events.filter((e) => e.tags.length).slice(0,8);
   $("event-list").innerHTML = events.length ? events.map((e) => `<div class="list-entry">${eventLink(e)}<p>${esc(e.code)} · ${dateLabel(e.day)} · ${esc(e.tags.join(" / "))}</p></div>`).join("") : `<div class="list-entry muted">${report.event_status === "available" ? "已采集公告中暂无命中关键词的标题；不代表没有风险。" : "公告未启用或不可用，暂无法完成事件风险核验。"}</div>`;
   const labels = {success:"成功",failed:"失败",running:"运行中",skipped:"跳过"};
-  $("run-list").innerHTML = data.runs.slice(0,4).map((r) => `<div class="list-entry"><div class="run-title"><span class="run-state ${esc(r.status)}">${labels[r.status] || esc(r.status)}</span><span>${r.kind === "daily" ? "盘后分析" : "公告补查"}</span><span class="muted">${timeLabel(r.started_at)}</span></div><p>${esc(r.message)}</p></div>`).join("") || '<div class="list-entry muted">暂无任务记录</div>';
+  const kinds = {daily:"日线分析", announcements:"公告补查", midday:"午间快照", close:"收盘快照", evening:"晚间分析"};
+  $("run-list").innerHTML = data.runs.slice(0,4).map((r) => `<div class="list-entry"><div class="run-title"><span class="run-state ${esc(r.status)}">${labels[r.status] || esc(r.status)}</span><span>${esc(kinds[r.kind] || r.kind)}</span><span class="muted">${timeLabel(r.started_at)}</span></div><p>${esc(r.message)}</p></div>`).join("") || '<div class="list-entry muted">暂无任务记录</div>';
 }
 function eventLink(event) {
   let url;

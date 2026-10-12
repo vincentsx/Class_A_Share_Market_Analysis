@@ -20,7 +20,7 @@ if ! .venv/bin/python -c 'import sys; assert sys.version_info >= (3, 11)' >/dev/
   echo "现有 .venv 的 Python 版本过低，请用 Python 3.11+ 重建虚拟环境；.env 和 data 可保留。"
   exit 1
 fi
-if ! .venv/bin/python -c 'import fastapi, sqlalchemy, httpx, jinja2, dotenv, psycopg, baostock, akshare' >/dev/null 2>&1; then
+if ! .venv/bin/python -c 'import fastapi, sqlalchemy, httpx, jinja2, dotenv, psycopg, baostock, akshare, playwright' >/dev/null 2>&1; then
   .venv/bin/python -m ensurepip --upgrade >/dev/null
   .venv/bin/python -m pip install -r requirements.txt
 fi
@@ -34,6 +34,17 @@ Path('.env').chmod(0o600)
 PY
 fi
 source_name="$(.venv/bin/python -c 'from stock_daily.config import Settings; print(Settings.from_env().source)')"
+if [[ "$(.venv/bin/python -c 'from stock_daily.config import Settings; print(Settings.from_env().export_png)')" == "True" ]]; then
+  if ! .venv/bin/python - <<'PY'
+from pathlib import Path
+from playwright.sync_api import sync_playwright
+with sync_playwright() as p:
+    assert Path(p.chromium.executable_path).is_file()
+PY
+  then
+    .venv/bin/python -m playwright install chromium
+  fi
+fi
 if [[ "$source_name" == "demo" ]]; then
   .venv/bin/python -m stock_daily demo
 else

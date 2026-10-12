@@ -37,7 +37,7 @@ et-xmlfile==2.0.0
 fastapi==0.143.0
     # via stock-daily (pyproject.toml)
 greenlet==3.5.6
-    # via sqlalchemy
+    # via playwright, sqlalchemy
 h11==0.16.0
     # via
     #   httpcore
@@ -129,3 +129,7 @@ webencodings==0.6.1
     # via html5lib
 xlrd==2.0.2
     # via akshare
+playwright==1.63.0
+    # via stock-daily (pyproject.toml)
+pyee==13.0.1
+    # via playwright

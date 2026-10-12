@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 
 def publish_html(db, settings, day, identifier):
-    if not settings.export_html:
+    if not settings.export_html and not settings.export_png:
         return None
     try:
         from .html_export import export_published
@@ -24,9 +24,9 @@ def publish_html(db, settings, day, identifier):
     except Exception:
         # The validated DB report is already published; a filesystem error must
         # not relabel it as a failed data acquisition or replace a previous HTML.
-        logger.exception("报告已保存，但离线HTML导出失败")
-        db.finish_run(identifier, "success", "报告已保存；HTML导出失败，请运行 export-html 重试")
-        return {"status": "failed", "message": "报告已保存，HTML导出失败"}
+        logger.exception("报告已保存，但离线HTML/PNG导出失败")
+        db.finish_run(identifier, "success", "报告已保存；HTML导出失败或PNG导出失败，请运行 export-html / export-png 重试")
+        return {"status": "failed", "message": "报告已保存，HTML/PNG导出失败"}
 
 
 def validate_batch(batch, universe, settings):

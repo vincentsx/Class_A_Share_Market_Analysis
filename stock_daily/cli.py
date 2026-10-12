@@ -31,17 +31,27 @@ def main():
     serve.add_argument("--host", default="127.0.0.1")
     serve.add_argument("--port", type=int, default=8000)
     commands.add_parser("worker", help="运行盘后及晚间定时任务")
+    snapshot = commands.add_parser("snapshot", help="采集当天实时快照并导出HTML/PNG")
+    snapshot.add_argument("--slot", choices=("midday", "close"), required=True)
+    commands.add_parser("evening", help="执行完整日线分析、补查公告并导出HTML/PNG")
     commands.add_parser("track", help="输出已保存信号的观察统计")
     html = commands.add_parser("export-html", help="导出可双击打开的离线HTML报告")
     html.add_argument("--date", help="指定已有报告日期，默认最新报告或采集状态")
     html.add_argument("--output", help="输出HTML路径，默认 data/html/数据源-latest.html")
     html.add_argument("--source", choices=("baostock", "tushare", "demo"), help="只选择导出来源，不修改配置")
+    png = commands.add_parser("export-png", help="将已有本地HTML导出为PNG概览长图")
+    png.add_argument("--html", help="输入HTML，默认当前数据源的latest.html")
+    png.add_argument("--output", help="输出PNG，默认与输入HTML同名")
+    saved_snapshot = commands.add_parser("export-snapshot", help="重新导出已保存实时快照的HTML/PNG，不重新请求行情")
+    saved_snapshot.add_argument("--date", help="YYYYMMDD，默认最新快照日期")
+    saved_snapshot.add_argument("--slot", choices=("midday", "close"), help="指定快照时段")
     watch = commands.add_parser("watch", help="管理自选股")
     watch.add_argument("action", choices=("add", "remove", "list"))
     watch.add_argument("code", nargs="?")
     watch.add_argument("--note", default="")
     args = parser.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+    logging.getLogger("httpx").setLevel(logging.WARNING)
     try:
         settings = Settings.from_env()
         if args.command == "demo":
@@ -79,6 +89,24 @@ def main():
             }
         elif args.command == "events":
             result = refresh_events(db, settings, args.date)
+        elif args.command == "snapshot":
+            from .intraday import run_snapshot
+
+            result = run_snapshot(db, settings, slot=args.slot)
+        elif args.command == "evening":
+            from .scheduler import run_evening
+
+            result = run_evening(db, settings, now().strftime("%Y%m%d"))
+        elif args.command == "export-png":
+            from pathlib import Path
+
+            from .png_export import export_png
+
+            result = export_png(args.html or Path(settings.html_report_dir) / f"{settings.source}-latest.html", args.output)
+        elif args.command == "export-snapshot":
+            from .intraday import export_saved_snapshot
+
+            result = export_saved_snapshot(db, settings, args.date, args.slot)
         elif args.command == "worker":
             worker(db, settings)
             return

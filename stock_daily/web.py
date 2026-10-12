@@ -4,7 +4,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import Depends, FastAPI, Header, HTTPException, Query, Request, Response
-from fastapi.responses import HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse
 from fastapi.staticfiles import StaticFiles
 from fastapi.templating import Jinja2Templates
 from pydantic import BaseModel, Field
@@ -43,10 +43,10 @@ def create_app(settings=None, database=None):
         response.headers["X-Content-Type-Options"] = "nosniff"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Referrer-Policy"] = "no-referrer"
-        response.headers["Content-Security-Policy"] = (
+        response.headers.setdefault("Content-Security-Policy", (
             "default-src 'self'; script-src 'self'; style-src 'self'; "
             "img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
-        )
+        ))
         return response
 
     def authorize(authorization: str = Header(default="")):
@@ -66,6 +66,22 @@ def create_app(settings=None, database=None):
         with database.engine.connect() as connection:
             connection.execute(text("SELECT 1"))
         return {"status": "ok", "source": settings.source}
+
+    @app.get("/artifacts/{filename}")
+    def artifact(filename: str):
+        pattern = rf"{re.escape(settings.source)}-(?:latest|\d{{8}}(?:-\d{{4}})?)\.(?:html|png)"
+        if not re.fullmatch(pattern, filename):
+            raise HTTPException(404, "报告文件不存在")
+        folder = Path(settings.html_report_dir).resolve()
+        path = (folder / filename).resolve()
+        if path.parent != folder or not path.is_file():
+            raise HTTPException(404, "报告尚未生成")
+        policy = "default-src 'none'; img-src data:; base-uri 'none'; frame-ancestors 'none'; form-action 'none'"
+        if path.suffix == ".html":
+            match = re.search(r'nonce="([A-Za-z0-9_-]{20,80})"', path.read_text())
+            if match:
+                policy += f"; script-src 'nonce-{match[1]}'; style-src 'nonce-{match[1]}'"
+        return FileResponse(path, headers={"Content-Security-Policy": policy, "Cache-Control": "no-store"})
 
     @app.get("/api/dashboard")
     def get_dashboard(day: str | None = Query(default=None, pattern=r"^\d{8}$")):

@@ -86,5 +86,23 @@ def export_published(db, settings, day):
     folder = Path(settings.html_report_dir)
     result = export_html(db, settings, day, folder / f"{settings.source}-{day}.html")
     # Reuse identical bytes so both copies represent the same snapshot.
+    if settings.export_png:
+        from .png_export import export_png
+
+        result["png"] = export_png(result["path"])
+        publish_latest_png(result["png"]["path"], folder / f"{settings.source}-latest.png")
     atomic_write((folder / f"{settings.source}-latest.html").resolve(), Path(result["path"]).read_text())
     return result
+
+
+def publish_latest_png(png, destination):
+    destination = Path(destination).resolve()
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(dir=destination.parent, delete=False) as file:
+            temporary = file.name
+            file.write(Path(png).read_bytes())
+        os.replace(temporary, destination)
+    finally:
+        if temporary and Path(temporary).exists():
+            Path(temporary).unlink()

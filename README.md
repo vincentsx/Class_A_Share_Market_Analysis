@@ -15,7 +15,7 @@ bash scripts/run_local.sh
 
 服务已经运行时，直接打开网页查看即可。电脑重启或服务停止后，再执行上述启动命令；请保持启动终端开启，避免重复启动网页或 worker。启动脚本不会自动设置开机启动。
 
-电脑需要开机、不休眠，并能联网。默认按北京时间17:30尝试盘后采集和分析、21:30补查公告；采集成功且 `EXPORT_HTML=true` 时，会自动更新 `data/html/baostock-latest.html`。保留 `.env` 和 `data/` 目录：已有行情和复权记录会复用，已经完成历史初始化的电脑无需从头采集。
+电脑需要开机、不休眠，并能联网。默认按北京时间 **11:35、15:05、20:30** 执行三个独立任务，成功后自动导出 HTML 与 PNG，并更新 `data/html/baostock-latest.html` 和 `data/html/baostock-latest.png`。保留 `.env` 和 `data/` 目录：已有行情和复权记录会复用，已经完成历史初始化的电脑无需从头采集。
 
 如需收盘后手动更新一次，另开终端执行；默认分析北京时间当天，指定日期和故障处理见“本地真实运行一次”：
 
@@ -31,12 +31,68 @@ cd /home/vincent/code/ai_gaoqian
 ```bash
 python3.12 -m venv .venv
 .venv/bin/pip install -r requirements.txt
+.venv/bin/python -m playwright install chromium
 cp .env.example .env
 .venv/bin/python -m stock_daily run --date 20261009
 .venv/bin/python -m stock_daily serve
 ```
 
 另开终端运行 `.venv/bin/python -m stock_daily worker` 才会执行定时任务。手动复制配置时可自行设置 `APP_API_KEY`；没有设置密钥，网页只允许读取，自选股仍可用 CLI 管理。
+
+## 每天三次运行与 HTML / PNG
+
+| 北京时间 | 工作内容 | 保存文件（以20261012为例） |
+| --- | --- | --- |
+| 11:35 | 免费新浪午间报价；统计上午累计成交额、涨跌广度和行业当日强弱，跟踪自选及上一份日线信号 | `baostock-20261012-1135.html`、`.png` |
+| 15:05 | 免费新浪收盘报价；同口径更新市场、行业和观察名单 | `baostock-20261012-1505.html`、`.png` |
+| 20:30 | BaoStock完整日线、复权和历史指标分析，公告按配置核验，发布收盘规则信号 | `baostock-20261012-2030.html`、`.png`，同时保存 `baostock-20261012.html/.png` |
+
+三次成功导出后均更新 `data/html/baostock-latest.html` 和 `baostock-latest.png`；带日期及时分的文件分别保留。任务时间是**开始采集时间**，全量采集、分析和图片渲染完成后才更新文件。网页上方提供最新HTML和PNG入口；下方日线工作台继续显示已核验的日线报告及其真实日期。
+
+午间和15:05快照使用免费新浪实时接口，无需Tushare积分；保留供应商每只股票的报价日期和时间。旧行情、错时段、无成交和无效报价不计入统计；有效报价须覆盖至少98%的缓存股票范围。范围来自此前日线采集的沪深A股基础信息，不含北交所，超过7天的缓存拒绝使用；可能遗漏缓存之后新上市的股票，因此不会声称实时统计覆盖全部A股。新浪接口口径可参考[AKShare官方实时行情说明](https://akshare.akfamily.xyz/data/stock/stock.html)。
+
+午间累计成交量不会外推成全天成交量，不用于放量突破判定。两次实时快照保存到独立表，不写入日线行情、正式信号或5/10/20日观察统计。20:30的BaoStock日线需另行核验；接口失败会记录失败，保留先前成功快照。缓存基础信息在报告当日已采集时，晚间任务可使用经过校验的个股历史恢复路径；否则使用常规接口重新获取范围，不绕过基础信息日期要求。合成demo模式跳过真实报价快照，仅运行晚间合成日线任务。
+
+现有 `.env` 需要使用以下配置，修改后重启网页和worker（此电脑的配置已更新）：
+
+```dotenv
+MIDDAY_TIME=11:35
+SCHEDULE_TIME=15:05
+ANNOUNCEMENT_TIME=20:30
+EXPORT_HTML=true
+EXPORT_PNG=true
+HTML_REPORT_DIR=./data/html
+```
+
+PNG由本地Chromium渲染独立HTML。启动脚本自动检查并安装浏览器；手动安装可执行：
+
+```bash
+.venv/bin/pip install -r requirements.txt
+.venv/bin/python -m playwright install chromium
+# Ubuntu若提示缺少浏览器系统库，执行（会使用sudo安装系统依赖）
+.venv/bin/python -m playwright install-deps chromium
+```
+
+Docker镜像也包含Chromium及中文字体。初次安装浏览器需要联网；HTML及PNG生成后可离线查看和分享。
+
+手动测试或重新导出：
+
+```bash
+# 当天午间执行；13:00后禁止用实时接口补造午间行情
+.venv/bin/python -m stock_daily snapshot --slot midday
+# 当天收盘后执行
+.venv/bin/python -m stock_daily snapshot --slot close
+# 数据源已提供完整日线后执行，通常留给20:30定时任务
+.venv/bin/python -m stock_daily evening
+# 将最新HTML重新生成同名PNG，不重新请求行情
+.venv/bin/python -m stock_daily export-png
+# 指定已有HTML与图片路径
+.venv/bin/python -m stock_daily export-png --html data/html/baostock-20261012-1135.html --output data/html/midday.png
+# 恢复图片导出失败的已保存午间快照，任意时间都可重导出
+.venv/bin/python -m stock_daily export-snapshot --date 20261012 --slot midday
+```
+
+重新导出指定历史快照会把它设为 `latest`，请以文件内日期和时间为准。采集成功而图片导出失败时，原数据仍保留；安装浏览器或修复写入权限后，用上述导出命令重试。电脑仍需保持开机、不休眠、联网，worker持续运行；文件本身不会执行定时任务。
 
 ## 本地真实运行一次
 
@@ -129,7 +185,7 @@ FREE_REQUEST_TIMEOUT=90
 
 大接口比单只股票接口慢。每个SDK操作有总超时，失败重连最多3次；可将 `FREE_REQUEST_TIMEOUT` 调至300秒以内。超时、空行情、日期不符、分页失败或覆盖不足都不会发布报告，也不会自动改用示例数据。免费接口不承诺可用性或全市场完整性，具体运行结果以任务记录为准。
 
-AKShare的 `stock_notice_report` 获取指定日期的公告标题、链接和日期；仅采集当前报告日公告，历史行情补齐不逐日抓取公告。SDK操作也受总超时限制。接口没有精确发布时间，因此本系统留空该字段。启用后21:30补查；接口不可用显示“公告未核验”，不会宣称没有风险。标题提示不读取正文，也不判断利好利空。
+AKShare的 `stock_notice_report` 获取指定日期的公告标题、链接和日期；仅采集当前报告日公告，历史行情补齐不逐日抓取公告。SDK操作也受总超时限制。接口没有精确发布时间，因此本系统留空该字段。启用后20:30核验；接口不可用显示“公告未核验”，不会宣称没有风险。标题提示不读取正文，也不判断利好利空。
 
 只读连通性检查不会写入行情或报告：
 
@@ -163,7 +219,7 @@ ENABLE_ANNOUNCEMENTS=false
 
 真实数据模式需要 `stock_basic`、`trade_cal`、`daily`、`adj_factor`、`daily_basic`、`suspend_d` 和沪深300的 `index_daily` 权限。按账号确认实际权限和频率；接口异常不自动切换示例数据。默认 HTTPS，不自动降级为 HTTP。
 
-公告使用 `anns_d`，需要单独权限。启用 `ENABLE_ANNOUNCEMENTS=true` 后会采集公告标题、日期、链接和可用的发布时间；未启用或接口失败时显示“公告未核验”。21:30补查公告只更新公告视图，保留原信号发布时的依据。此版本只按标题关键词提示，没有读取 PDF 正文，不判断事件的利好或利空方向。
+公告使用 `anns_d`，需要单独权限。启用 `ENABLE_ANNOUNCEMENTS=true` 后会采集公告标题、日期、链接和可用的发布时间；未启用或接口失败时显示“公告未核验”。20:30补查公告只更新公告视图，保留原信号发布时的依据。此版本只按标题关键词提示，没有读取 PDF 正文，不判断事件的利好或利空方向。
 
 接口参考：[日线](https://tushare.pro/document/2?doc_id=27)、[每日指标](https://tushare.pro/document/2?doc_id=32)、[股票列表](https://tushare.pro/document/2?doc_id=25)、[交易日历](https://tushare.pro/document/2?doc_id=26)、[停复牌](https://tushare.pro/document/2?doc_id=214)、[公告](https://tushare.pro/document/2?doc_id=176)、[HTTP API](https://tushare.pro/document/1?doc_id=40)。使用和展示数据时遵循数据提供方的授权范围。
 
@@ -186,7 +242,7 @@ ENABLE_ANNOUNCEMENTS=false
 
 真实源尚未发布报告时，最新导出会明确显示采集状态，不会代入示例行情。指定日期没有报告会报错，并保留原输出文件。文件标注导出时间和数据日期，已打开的文件不会自动获取行情；更新后重新打开，或点击“重载文件”读取当前文件内容。
 
-`.env` 设置 `EXPORT_HTML=true`（新配置默认开启）和 `HTML_REPORT_DIR=./data/html`，盘后报告与晚间公告更新成功后会自动生成 `数据源-YYYYMMDD.html` 和 `数据源-latest.html`。HTML写入失败会保留已发布的数据库报告，在任务记录提示，可通过CLI重试。修改配置后重启worker。
+`.env` 默认启用 `EXPORT_HTML=true`、`EXPORT_PNG=true` 和 `HTML_REPORT_DIR=./data/html`。手动日线任务生成 `数据源-YYYYMMDD.html/.png`；定时任务另存带时分的文件，见下方时间表。`latest` 指向最近一次成功导出的版本，因此午间或下午可能是实时快照，晚间才是完整日线分析。文件内注明数据日期、时间和来源。HTML为可交互的完整数据快照；PNG是默认概览的长图，包含市场、行业、观察名单和涨幅前40名，不包含HTML搜索才能查看的全部报价。
 
 若首次采集已经在旧进程中运行，可另外等待它完成后导出：`PYTHONPATH=. .venv/bin/python scripts/export_when_ready.py --date 20261009`。该脚本期间更新状态快照，等待最长6小时；采集失败会显示失败状态，不生成伪造行情报告。
 
@@ -216,7 +272,7 @@ Tushare官方权限表列出的基础非复权日线门槛为120积分，100积�
 
 当天行情、元信息、报告和信号在同一数据库事务中发布；失败保留之前的已发布结果，成功采集的历史可用于断点续采。示例和真实数据按 `source` 完全隔离。自选股列表共用，切换数据源后会重新分析，示例添加的代码可自行移除。
 
-worker 使用 `Asia/Shanghai`，默认17:30盘后任务、21:30公告补查（`SCHEDULE_TIME` / `ANNOUNCEMENT_TIME` 可改）。启动时补执行当天已到时间且未成功的任务，失败每15分钟重试，当天最多4次。非交易日记录跳过。**worker 停止时没有调度；电脑需开机且进程运行。** 停机数日后的下一次运行会补齐计算窗口内的行情，但不会自动生成停机期间的每一天报告。
+worker 使用 `Asia/Shanghai`，默认11:35午间快照、15:05收盘快照、20:30完整日线分析及公告核验。三个时段的成功记录独立保存。启动时补执行当前时段已到时间且未成功的任务；午间仅在13:00之前补采，收盘快照仅在20:30之前补采，避免用下午行情伪造午间数据。失败在时段内每15分钟重试，每个时段每天最多4次。非交易日按交易日历跳过。**worker 停止时没有调度；电脑需开机且进程运行。** 停机数日后的下一次运行会补齐计算窗口内的行情，但不会自动生成停机期间的每一天报告。
 
 数据库任务锁避免重复写入；进程异常退出后锁最长6小时过期。可配置 `ALERT_WEBHOOK`，任务失败后向该地址 POST 通用 JSON；默认关闭，失败也会记录在页面中。
 

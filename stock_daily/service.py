@@ -27,6 +27,7 @@ def dashboard(db, settings, day=None):
         "runs": tasks,
         "watchlist": [],
         "today": now().strftime("%Y%m%d"),
+        "midday_time": settings.midday_time,
         "schedule_time": settings.schedule_time,
         "announcement_time": settings.announcement_time,
     }

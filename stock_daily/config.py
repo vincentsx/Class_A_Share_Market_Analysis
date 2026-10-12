@@ -24,14 +24,16 @@ class Settings:
     free_timeout: float = 90
     announcements: bool = False
     api_key: str = ""
-    schedule_time: str = "17:30"
-    announcement_time: str = "21:30"
+    midday_time: str = "11:35"
+    schedule_time: str = "15:05"
+    announcement_time: str = "20:30"
     history_sessions: int = 100
     min_amount: float = 50_000_000
     min_coverage: float = 0.98
     max_candidates: int = 20
     alert_webhook: str = ""
     export_html: bool = False
+    export_png: bool = False
     html_report_dir: str = "./data/html"
 
     @classmethod
@@ -47,14 +49,16 @@ class Settings:
             free_timeout=float(os.getenv("FREE_REQUEST_TIMEOUT", "90")),
             announcements=os.getenv("ENABLE_ANNOUNCEMENTS", "false").lower() == "true",
             api_key=os.getenv("APP_API_KEY", ""),
-            schedule_time=os.getenv("SCHEDULE_TIME", "17:30"),
-            announcement_time=os.getenv("ANNOUNCEMENT_TIME", "21:30"),
+            midday_time=os.getenv("MIDDAY_TIME", "11:35"),
+            schedule_time=os.getenv("SCHEDULE_TIME", "15:05"),
+            announcement_time=os.getenv("ANNOUNCEMENT_TIME", "20:30"),
             history_sessions=int(os.getenv("HISTORY_SESSIONS", "100")),
             min_amount=float(os.getenv("MIN_AMOUNT_YUAN", "50000000")),
             min_coverage=float(os.getenv("MIN_COVERAGE", "0.98")),
             max_candidates=int(os.getenv("MAX_CANDIDATES", "20")),
             alert_webhook=os.getenv("ALERT_WEBHOOK", ""),
             export_html=os.getenv("EXPORT_HTML", "true").lower() == "true",
+            export_png=os.getenv("EXPORT_PNG", "true").lower() == "true",
             html_report_dir=os.getenv("HTML_REPORT_DIR", "./data/html"),
         )
         if config.source not in {"demo", "tushare", "baostock"}:
@@ -65,8 +69,12 @@ class Settings:
             raise ValueError("HISTORY_SESSIONS 至少为65，MIN_COVERAGE 范围为 (0,1]")
         if config.max_candidates < 1 or config.min_amount < 0 or config.request_interval < 0:
             raise ValueError("候选数量、成交额或请求间隔配置无效")
-        for value in (config.schedule_time, config.announcement_time):
+        for value in (config.midday_time, config.schedule_time, config.announcement_time):
             datetime.strptime(value, "%H:%M")
+        if not "11:30" <= config.midday_time < "13:00":
+            raise ValueError("MIDDAY_TIME 必须在11:30～12:59，避免把下午行情当成午间行情")
+        if not "15:00" <= config.schedule_time < config.announcement_time:
+            raise ValueError("SCHEDULE_TIME 必须在15:00之后且早于 ANNOUNCEMENT_TIME")
         if config.database_url.startswith("sqlite:///./"):
             Path(config.database_url.removeprefix("sqlite:///")).parent.mkdir(parents=True, exist_ok=True)
         return config

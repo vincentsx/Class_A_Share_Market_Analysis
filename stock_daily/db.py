@@ -24,6 +24,13 @@ from sqlalchemy.exc import IntegrityError
 from .config import now
 
 metadata = MetaData()
+snapshots = Table(
+    "snapshots", metadata,
+    Column("source", String(20), primary_key=True),
+    Column("day", String(8), primary_key=True),
+    Column("slot", String(20), primary_key=True),
+    Column("payload", JSON, nullable=False),
+)
 provider_cache = Table(
     "provider_cache",
     metadata,
