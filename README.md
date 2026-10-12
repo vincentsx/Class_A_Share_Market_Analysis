@@ -7,10 +7,22 @@
 需要 Python 3.11+（推荐3.12，AKShare要求3.11以上）。Ubuntu 缺少 venv 时先安装对应版本的 `python3-venv`。只有旧版Python时可先执行 `uv python install 3.12` 和 `uv venv --seed --python 3.12 .venv`。
 
 ```bash
+cd /home/vincent/code/ai_gaoqian
 bash scripts/run_local.sh
 ```
 
 打开 <http://127.0.0.1:8000>。脚本会启动网页和定时 worker；按 Ctrl+C 结束。首次创建的 `.env` 带有随机 `APP_API_KEY`，网页添加和移除自选股需要此密钥。首次真实数据初始化需在另一个终端执行下面的盘后采集命令。
+
+服务已经运行时，直接打开网页查看即可。电脑重启或服务停止后，再执行上述启动命令；请保持启动终端开启，避免重复启动网页或 worker。启动脚本不会自动设置开机启动。
+
+电脑需要开机、不休眠，并能联网。默认按北京时间17:30尝试盘后采集和分析、21:30补查公告；采集成功且 `EXPORT_HTML=true` 时，会自动更新 `data/html/baostock-latest.html`。保留 `.env` 和 `data/` 目录：已有行情和复权记录会复用，已经完成历史初始化的电脑无需从头采集。
+
+如需收盘后手动更新一次，另开终端执行；默认分析北京时间当天，指定日期和故障处理见“本地真实运行一次”：
+
+```bash
+cd /home/vincent/code/ai_gaoqian
+.venv/bin/python -m stock_daily run
+```
 
 **新配置默认使用免费 BaoStock 行情和 AKShare 公告，无需 Tushare Token。** 已有 `.env` 不会被启动脚本自动覆盖，需自行修改 `DATA_SOURCE`。免费模式覆盖 BaoStock 的沪深A股，不含北交所、B股、ETF和债券。页面明确显示数据来源和范围。
 
