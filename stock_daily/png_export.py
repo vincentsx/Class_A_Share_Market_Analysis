@@ -31,6 +31,18 @@ def export_png(html_path, output=None):
                 page.route("https://**/*", lambda route: route.abort())
                 page.goto(html.as_uri(), wait_until="load")
                 page.wait_for_function("window.REPORT_READY === true", timeout=30000)
+                # A bitmap cannot switch tabs or open collapsed sections later.
+                # Let the report expose its dedicated, fully visible export view.
+                try:
+                    page.evaluate("""async () => {
+                        if (typeof window.prepareReportForExport === 'function') {
+                            await window.prepareReportForExport();
+                        } else if (document.getElementById('quote-snapshot')) {
+                            throw new Error('旧版实时HTML需要重新导出');
+                        }
+                    }""")
+                except Exception as error:
+                    raise DataError("图片内容展开失败；请用 export-snapshot 重新导出该时段HTML，原PNG已保留") from error
                 page.evaluate("document.fonts.ready")
                 if errors:
                     raise DataError("HTML 页面脚本异常，未替换 PNG")

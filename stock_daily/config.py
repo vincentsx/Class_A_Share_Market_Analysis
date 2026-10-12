@@ -23,6 +23,9 @@ class Settings:
     free_request_interval: float = 0.3
     free_timeout: float = 90
     announcements: bool = False
+    news_enabled: bool = False
+    news_interval_minutes: int = 10
+    news_timeout: float = 8
     api_key: str = ""
     midday_time: str = "11:35"
     schedule_time: str = "15:05"
@@ -57,6 +60,9 @@ class Settings:
             free_request_interval=float(os.getenv("FREE_REQUEST_INTERVAL", "0.3")),
             free_timeout=float(os.getenv("FREE_REQUEST_TIMEOUT", "90")),
             announcements=os.getenv("ENABLE_ANNOUNCEMENTS", "false").lower() == "true",
+            news_enabled=os.getenv("ENABLE_NEWS", "true").lower() == "true",
+            news_interval_minutes=int(os.getenv("NEWS_INTERVAL_MINUTES", "10")),
+            news_timeout=float(os.getenv("NEWS_TIMEOUT", "8")),
             api_key=os.getenv("APP_API_KEY", ""),
             midday_time=os.getenv("MIDDAY_TIME", "11:35"),
             schedule_time=os.getenv("SCHEDULE_TIME", "15:05"),
@@ -83,6 +89,8 @@ class Settings:
             raise ValueError("DATA_SOURCE 必须是 demo、baostock 或 tushare")
         if config.free_request_interval < 0 or not 1 <= config.free_timeout <= 300:
             raise ValueError("免费接口请求间隔需非负，超时需为1～300秒")
+        if not 5 <= config.news_interval_minutes <= 60 or not 1 <= config.news_timeout <= 20:
+            raise ValueError("NEWS_INTERVAL_MINUTES需为5～60分钟，NEWS_TIMEOUT需为1～20秒")
         if config.history_sessions < 65 or not 0 < config.min_coverage <= 1:
             raise ValueError("HISTORY_SESSIONS 至少为65，MIN_COVERAGE 范围为 (0,1]")
         if config.max_candidates < 1 or config.min_amount < 0 or config.request_interval < 0:

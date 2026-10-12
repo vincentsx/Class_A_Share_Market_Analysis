@@ -5,19 +5,19 @@ import math
 import re
 import secrets
 import time
-from collections import defaultdict
 from datetime import datetime, timedelta
 from pathlib import Path
-from statistics import mean
 
 import httpx
 from jinja2 import Environment, FileSystemLoader, select_autoescape
 from sqlalchemy import select
 
 from .config import SHANGHAI, now
-from .db import sessions, snapshots, watchlist
+from .db import reports, sessions, snapshots, trading_days, watchlist
 from .html_export import ASSETS, atomic_write, publish_latest_png, script_json
 from .providers import DataError, make_provider, parse_day
+from .snapshot_analysis import analyze_snapshot
+from .static_report import snapshot_view, template_helpers
 
 logger = logging.getLogger(__name__)
 LABELS = {"midday": "午间观察", "close": "收盘快照"}
@@ -111,22 +111,15 @@ def build_snapshot(db, settings, day, slot, quotes, missing, stocks, metadata_at
         raise DataError(f"实时有效报价覆盖缓存股票范围 {coverage:.1%}，不足 {settings.min_coverage:.1%}；未发布快照")
     if slot == "midday" and now().strftime("%Y%m%d") == day and now().hour >= 13:
         raise DataError("已进入下午交易时段，不能补采午间快照")
-    sectors = defaultdict(list)
-    for row in rows:
-        sectors[row["industry"]].append(row)
-    industries = sorted([{"name": name, "count": len(group), "pct": mean(r["pct"] for r in group),
-                          "up_ratio": sum(r["pct"] > 0 for r in group) / len(group) * 100,
-                          "amount": sum(r["amount"] for r in group)}
-                         for name, group in sectors.items()], key=lambda r: r["pct"], reverse=True)
-    report = db.latest_report(settings.source)
     # Reference candidates must predate the snapshot (no look-ahead when backfilling).
-    report = report if report and report["day"] < day else None
+    saved_reports = db.rows(select(reports.c.payload).where(
+        reports.c.source == settings.source, reports.c.day < day)
+        .order_by(reports.c.day.desc()).limit(1))
+    report = saved_reports[0]["payload"] if saved_reports else None
     watched = {r["code"] for r in db.rows(select(watchlist))}
     reference = {r["code"] for r in report["candidates"]} if report else set()
-    focus = [{**r, "reason": "自选股" if r["code"] in watched else "上一份日线观察信号"}
-             for r in rows if r["code"] in watched | reference]
     timestamps = [r["quote_time"] for r in rows]
-    return {"day": day, "slot": slot, "label": LABELS[slot], "source": settings.source,
+    payload = {"day": day, "slot": slot, "label": LABELS[slot], "source": settings.source,
             "scheduled_time": settings.midday_time if slot == "midday" else settings.schedule_time,
             "quote_provider": "新浪免费实时行情", "captured_at": now().isoformat(),
             "quote_start": min(timestamps), "quote_end": max(timestamps), "metadata_at": metadata_at,
@@ -134,9 +127,15 @@ def build_snapshot(db, settings, day, slot, quotes, missing, stocks, metadata_at
             "market": {"count": len(rows), "up": sum(r["pct"] > 0 for r in rows),
                        "down": sum(r["pct"] < 0 for r in rows), "flat": sum(r["pct"] == 0 for r in rows),
                        "amount": sum(r["amount"] for r in rows), "benchmark": benchmark},
-            "industries": industries, "focus": sorted(focus, key=lambda r: r["pct"], reverse=True),
             "reference_day": report["day"] if report else None,
             "quotes": sorted(rows, key=lambda r: r["pct"], reverse=True)}
+    analyze_snapshot(db, settings, payload, stocks)
+    payload["focus"] = [{**r, "reason": "自选股" if r["code"] in watched else "上一份日线观察信号"}
+                        for r in payload["quotes"] if r["code"] in watched | reference]
+    from .news import build_news
+
+    payload["news"] = build_news(db, settings, payload)
+    return payload
 
 
 def export_snapshot(payload, settings):
@@ -144,9 +143,11 @@ def export_snapshot(payload, settings):
     cutoff = payload.get("scheduled_time") or (settings.midday_time if payload["slot"] == "midday" else settings.schedule_time)
     path = folder / f"{settings.source}-{payload['day']}-{cutoff.replace(':', '')}.html"
     env = Environment(loader=FileSystemLoader(ASSETS / "templates"), autoescape=select_autoescape(["html"]))
+    template_helpers(env)
     content = env.get_template("snapshot.html").render(
         data=payload, snapshot=script_json(payload), nonce=secrets.token_urlsafe(24), cutoff=cutoff,
-        css=(ASSETS / "static/snapshot.css").read_text(),
+        static_report=snapshot_view(payload),
+        css=(ASSETS / "static/snapshot.css").read_text() + (ASSETS / "static/mail_report.css").read_text(),
         javascript=(ASSETS / "static/snapshot.js").read_text(),
     )
     atomic_write(path.resolve(), content)
@@ -170,10 +171,27 @@ def export_saved_snapshot(db, settings, day=None, slot=None):
     saved = db.rows(query.order_by(snapshots.c.day.desc(), snapshots.c.slot.asc()).limit(1))
     if not saved:
         raise DataError("没有符合日期和时段的已保存实时快照")
-    return {"status": "success", **export_snapshot(saved[0]["payload"], settings)}
+    payload = saved[0]["payload"]
+    if not payload.get("analysis"):
+        # Upgrade an old saved quote snapshot using only earlier price windows.
+        # Preserve the original quotes, capture time and observation list.
+        saved_metadata = db.rows(select(sessions.c.universe).where(
+            sessions.c.source == settings.source, sessions.c.day <= payload["day"])
+            .order_by(sessions.c.day.desc()).limit(1))
+        stocks = saved_metadata[0]["universe"] if saved_metadata else {}
+        reasons = {r["code"]: r["reason"] for r in payload["focus"]}
+        analyze_snapshot(db, settings, payload, stocks)
+        payload["focus"] = [{**r, "reason": reasons[r["code"]]} for r in payload["quotes"]
+                            if r["code"] in reasons]
+    if not payload.get("news"):
+        from .news import build_news
+
+        # Ordinary re-export never fetches or adds knowledge observed after capture.
+        payload["news"] = build_news(db, settings, payload)
+    return {"status": "success", **export_snapshot(payload, settings)}
 
 
-def run_snapshot(db, settings, day=None, slot="midday", feed=None, provider=None):
+def run_snapshot(db, settings, day=None, slot="midday", feed=None, provider=None, news_feed=None):
     day = day or now().strftime("%Y%m%d")
     parse_day(day)
     if slot not in LABELS:
@@ -186,13 +204,21 @@ def run_snapshot(db, settings, day=None, slot="midday", feed=None, provider=None
                 db.finish_run(identifier, "skipped", "合成示例不混入真实实时行情；20:30生成示例日线报告")
                 return {"status": "skipped", "day": day}
             active_provider = active_provider or make_provider(settings, db)
-            if day not in active_provider.calendar(day, day):
+            calendar_start = (parse_day(day) - timedelta(days=60)).strftime("%Y%m%d")
+            calendar = active_provider.calendar(calendar_start, day)
+            if day not in calendar:
                 db.finish_run(identifier, "skipped", "非交易日，不生成实时快照")
                 return {"status": "skipped", "day": day}
             if day != now().strftime("%Y%m%d"):
                 raise DataError("实时快照只能采集北京时间当天；历史时段不能用当前行情补造")
             if slot == "midday" and now().hour >= 13:
                 raise DataError("已进入下午交易时段，不能补采午间快照；已有快照可用 export-snapshot 重导出")
+            # Refresh the actual exchange sessions so a missing evening run
+            # cannot silently make an older bar or snapshot become "yesterday".
+            with db.engine.begin() as connection:
+                for calendar_day in calendar:
+                    db.upsert(connection, trading_days, {"source": settings.source,
+                                                        "day": calendar_day, "is_open": 1})
             saved = db.rows(select(sessions.c.universe, sessions.c.acquired_at)
                             .where(sessions.c.source == settings.source)
                             .order_by(sessions.c.acquired_at.desc()).limit(1))
@@ -204,6 +230,13 @@ def run_snapshot(db, settings, day=None, slot="midday", feed=None, provider=None
             stocks = {code: stock for code, stock in saved[0]["universe"].items()
                       if stock["list_date"] and stock["list_date"] <= day
                       and (not stock["delist_date"] or stock["delist_date"] > day)}
+            if settings.news_enabled:
+                from .news import collect_news
+
+                try:
+                    collect_news(db, settings, feed=news_feed)
+                except Exception:
+                    logger.warning("新闻采集未完成；继续生成行情快照", exc_info=True)
             quotes, missing = (feed or SinaQuotes(settings)).fetch(stocks, day, slot)
             payload = build_snapshot(db, settings, day, slot, quotes, missing, stocks, metadata_at)
             # Separate storage: provisional intraday prices never become daily bars,

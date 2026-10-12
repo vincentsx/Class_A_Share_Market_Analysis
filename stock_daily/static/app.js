@@ -82,6 +82,7 @@ async function load(day = "") {
       message(active ? `${OFFLINE ? "导出时正在采集" : "正在采集"} ${dateLabel(active.day)} 的${data.source === "demo" ? "合成示例" : "真实行情"}：${active.message}${progress}。${OFFLINE ? "本文件尚无已发布报告，采集完成后需重新导出。" : "完成数据校验后将显示报告。"}` : failure ? `最近任务失败：${failure.message}` : "", !active && !!failure);
     }
     if (currentView === "tracking") await loadTracking();
+    if (OFFLINE && $("static-report")) $("static-report").hidden = true;
     window.REPORT_READY = true;
   } catch (error) { message(error.message, true); }
   finally { if (id === refreshId) $("refresh").disabled = false; }

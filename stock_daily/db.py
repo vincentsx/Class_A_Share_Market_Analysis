@@ -25,6 +25,26 @@ from sqlalchemy.exc import IntegrityError
 from .config import now
 
 metadata = MetaData()
+news_items = Table(
+    "news_items", metadata,
+    Column("provider", String(20), primary_key=True),
+    Column("id", String(64), primary_key=True),
+    Column("published_at", String(40), nullable=False, index=True),
+    Column("first_seen_at", String(40), nullable=False),
+    Column("title", Text, nullable=False),
+    Column("content", Text, nullable=False),
+    Column("url", Text, nullable=False),
+    Column("important", Integer, nullable=False),
+)
+news_fetches = Table(
+    "news_fetches", metadata,
+    Column("provider", String(20), primary_key=True),
+    Column("fetched_at", String(40), primary_key=True),
+    Column("status", String(20), nullable=False),
+    Column("count", Integer, nullable=False),
+    Column("invalid_count", Integer, nullable=False),
+    Column("error", Text, nullable=False),
+)
 mail_outbox = Table(
     "mail_outbox", metadata,
     Column("id", String(64), primary_key=True),

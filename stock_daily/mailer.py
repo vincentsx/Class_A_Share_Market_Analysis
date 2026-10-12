@@ -111,7 +111,7 @@ def compose_message(settings, day, slot, html, png, details=None, preview=False)
         lines.append(f'日线报告生成时间：{details["generated_at"]}')
     if slot != 'evening':
         lines.append('实时观察快照，不生成新的正式日线信号；午间成交数据为累计值。')
-    lines += ['', '附件PNG为概览长图；HTML含完整报告数据，下载后用浏览器打开。',
+    lines += ['', '附件PNG为概览长图；HTML可在手机附件预览直接阅读主要数据，用浏览器打开可搜索和筛选。',
               '文件为独立快照，不会自行更新。']
     if preview:
         lines.append('这是本地预览文件，尚未通过SMTP发送。')

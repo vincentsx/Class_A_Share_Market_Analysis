@@ -13,6 +13,7 @@ from .config import now
 from .db import bars
 from .providers import DataError, parse_day
 from .service import dashboard, tracking
+from .static_report import daily_view, template_helpers
 
 ASSETS = Path(__file__).parent
 
@@ -64,12 +65,14 @@ def export_html(db, settings, day=None, output=None):
         observations["method"] += f" 观察数据截止于 {report['day']}。"
     payload = {"dashboard": data, "tracking": observations, "histories": histories, "exported_at": now().isoformat()}
     environment = Environment(loader=FileSystemLoader(ASSETS / "templates"), autoescape=select_autoescape(["html"]))
+    template_helpers(environment)
     text = environment.get_template("index.html").render(
         source=settings.source,
         offline=True,
         nonce=secrets.token_urlsafe(24),
         exported_at=now().strftime("%Y-%m-%d %H:%M（北京时间）"),
-        css=(ASSETS / "static/style.css").read_text(),
+        css=(ASSETS / "static/style.css").read_text() + (ASSETS / "static/mail_report.css").read_text(),
+        static_report=daily_view(payload),
         javascript=(ASSETS / "static/app.js").read_text(),
         snapshot=script_json(payload),
     )

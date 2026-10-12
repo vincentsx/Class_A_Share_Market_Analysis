@@ -31,10 +31,11 @@
       <div class="topbar-right"><button id="mobile-method" class="row-detail" aria-label="查看规则与数据说明">规则</button><span id="source-chip" class="chip">{{ {'demo': '合成示例', 'baostock': 'BaoStock · 免费', 'tushare': 'Tushare'}[source] }}</span><span class="avatar">研</span></div></header>
     <div class="content">
       <div class="page-heading"><div><div class="eyebrow">AFTER THE CLOSE</div><h1 id="page-title">把今天的市场，看清楚。</h1><p id="subtitle">市场广度、行业强弱与值得跟踪的变化。</p></div>
-        <div class="heading-actions"><label class="sr-only" for="date-select">报告日期</label><select id="date-select"><option>加载中</option></select><button id="refresh" class="button secondary">↻ 刷新</button></div></div>
+        <div class="heading-actions"><label class="sr-only" for="date-select">报告日期</label><select id="date-select"><option>{% if offline %}{{ static_report.day or "暂无报告" }}{% else %}加载中{% endif %}</option></select><button id="refresh" class="button secondary">↻ 刷新</button></div></div>
       <div id="demo-banner" class="notice demo" hidden><b>示例工作台</b><span>全部行情、公司名称和公告均为合成数据；工作日历不代表真实交易日历。</span></div>
       {% if offline %}<div class="notice"><b>本地离线快照 · 只读</b><span>导出于 {{ exported_at }}。内容截止于所标日期，文件不会自动获取行情；重新导出后再打开查看更新。</span></div>{% endif %}
       {% if not offline %}<div class="notice"><b>每日三次 · HTML与PNG</b><span>11:35午间快照 / 15:05收盘快照 / 20:30日线分析。<a href="/artifacts/{{ source }}-latest.html" target="_blank" rel="noopener">查看最新HTML</a> · <a href="/artifacts/{{ source }}-latest.png" target="_blank" rel="noopener">查看最新PNG</a>。下方工作台显示已核验的日线报告。</span></div>{% endif %}
+      {% if offline %}{% with mail=static_report %}{% include "mail_report.html" %}{% endwith %}{% endif %}
       <div id="message" class="notice" role="status" hidden></div>
       {% if not offline %}<div id="email-status" class="notice" role="status" hidden></div>{% endif %}
       <div id="empty" class="empty-state" hidden><div class="empty-icon">◫</div><h2 id="empty-title">第一份复盘，等待生成。</h2><p id="empty-help">{{ '初始化合成示例后即可浏览。' if source == 'demo' else '请运行盘后采集。非交易日用 --date 指定实际交易日，首次需要补齐历史。' }}</p><code id="empty-command">.venv/bin/python -m stock_daily {{ 'demo' if source == 'demo' else 'run' }}</code>{% if source == 'baostock' %}<p>BaoStock 覆盖的沪深A股，不含北交所；公告由 AKShare 补查。</p>{% endif %}</div>

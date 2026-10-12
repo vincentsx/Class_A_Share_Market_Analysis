@@ -104,6 +104,13 @@ def worker(db, settings):
                 settings.midday_time, settings.schedule_time, settings.announcement_time)
     while not stopped.is_set():
         current = now()
+        if settings.news_enabled and settings.source != "demo" and "08:00" <= current.strftime("%H:%M") < "21:00":
+            from .news import collect_news
+
+            try:
+                collect_news(db, settings)
+            except Exception:
+                logger.warning("热点新闻采集未完成；行情任务继续运行", exc_info=True)
         for kind, cutoff, deadline in (
             ("midday", settings.midday_time, "13:00"),
             ("close", settings.schedule_time, settings.announcement_time),
