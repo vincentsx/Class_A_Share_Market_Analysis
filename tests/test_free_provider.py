@@ -8,7 +8,7 @@ from stock_daily.config import Settings
 from stock_daily.free_provider import BaoStockProvider
 from stock_daily.pipeline import run_daily, validate_batch
 from stock_daily.providers import DataError, DemoProvider, parse_day
-from stock_daily.sdk_client import SDKClient, read_result
+from stock_daily.sdk_client import SDKClient, read_result, sdk_worker
 
 
 class FakeSDK:
@@ -128,6 +128,19 @@ def test_sdk_page_failure_cannot_publish_a_truncated_result():
                              cur_page_num="1", cur_row_num=0, next=lambda: False)
     with pytest.raises(DataError, match="下一页"):
         read_result(result)
+
+
+def test_sdk_worker_honors_configured_socket_timeout(monkeypatch):
+    timeouts = []
+    monkeypatch.setattr("stock_daily.sdk_client.socket.setdefaulttimeout", timeouts.append)
+    pipe = SimpleNamespace(recv=lambda: None, close=lambda: None)
+    sdk_worker(pipe, 90)
+    assert timeouts == [90]  # A slow bulk response must not hit a hidden 30s limit.
+
+
+def test_sdk_network_receive_error_is_readable():
+    with pytest.raises(DataError, match="网络接收错误.*10002007"):
+        read_result(SimpleNamespace(error_code="10002007"))
 
 
 def unresponsive_worker(pipe, timeout):

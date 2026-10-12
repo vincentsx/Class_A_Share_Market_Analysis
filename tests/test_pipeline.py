@@ -128,6 +128,28 @@ def test_resume_reuses_successful_historical_sessions(settings, db):
     assert not previous_days.intersection(resumed)
 
 
+def test_keyboard_interrupt_records_failure_and_releases_lock(settings, db):
+    provider = DemoProvider(settings)
+    original = provider.fetch_day
+    calls = []
+
+    def interrupted(day):
+        calls.append(day)
+        if len(calls) == 7:
+            raise KeyboardInterrupt
+        return original(day)
+
+    provider.fetch_day = interrupted
+    with pytest.raises(KeyboardInterrupt):
+        run_daily(db, settings, "20261009", provider=provider)
+    task = db.rows(select(runs).order_by(runs.c.started_at.desc()).limit(1))[0]
+    assert task["status"] == "failed" and "已中断" in task["message"]
+    assert len(db.rows(select(sessions))) == 5
+    assert db.latest_report("demo") is None
+    with db.lock("demo"):
+        pass
+
+
 def test_source_data_isolation(populated):
     db, settings, provider = populated
     assert dashboard(db, replace(settings, source="tushare"))["report"] is None

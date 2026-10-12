@@ -8,7 +8,7 @@ from sqlalchemy import delete, select, update
 
 from .analysis import build_report
 from .config import now
-from .db import bars, reports, runs, sessions, signals, trading_days
+from .db import BusyError, bars, reports, runs, sessions, signals, trading_days
 from .providers import DataError, make_provider, parse_day
 
 logger = logging.getLogger(__name__)
@@ -208,6 +208,8 @@ def run_daily(db, settings, day=None, force=False, provider=None):
             )
             report["generated_at"] = now().isoformat()
             report["acquired_at"] = today["acquired_at"]
+            if getattr(active_provider, "data_notes", None):
+                report["data_notes"] = active_provider.data_notes
             with db.engine.begin() as connection:
                 # Publish today's raw data, metadata, report and signals atomically.
                 save_session(db, connection, source, today, today_rows)
@@ -230,13 +232,24 @@ def run_daily(db, settings, day=None, force=False, provider=None):
             if html:
                 result["html"] = html
             return result
-    except Exception as error:
+    except (Exception, KeyboardInterrupt) as error:
         message = (
-            str(error)
+            "采集已中断；已保存的历史和断点可在下次运行继续"
+            if isinstance(error, KeyboardInterrupt)
+            else str(error)
             if isinstance(error, (DataError, ValueError, RuntimeError))
             else "任务异常，请检查服务日志"
         )
         db.finish_run(identifier, "failed", message)
+        if settings.export_html and not isinstance(error, BusyError):
+            try:
+                from .html_export import export_html
+
+                # Refresh the latest snapshot with the failure and retain any
+                # previously published report. Never export incomplete bars.
+                export_html(db, settings)
+            except Exception:
+                logger.exception("采集失败状态的离线HTML更新失败")
         alert(settings, f"{day} 分析失败：{message}")
         raise
     finally:

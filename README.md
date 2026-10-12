@@ -80,6 +80,20 @@ cd /home/vincent/code/ai_gaoqian
 
 `--force` 用于修正数据或重算，不用于并行启动正在运行的任务。
 
+### 5. 进程结束但 HTML 没有数据
+
+进程结束不代表任务成功。先查看网页上的失败原因，或此前后台任务的 `data/initial_free_run.log`。首次历史补齐失败时不会发布不完整报告，HTML 会显示失败状态；修复后的版本会自动刷新该状态。网络接收错误或超时后，可重新执行同一个日期的 `run` 命令继续，已经保存的历史和复权记录会复用，无需删除数据库或加 `--force`。
+
+全市场接口较慢时，可在 `.env` 将 `FREE_REQUEST_TIMEOUT` 调整为180，再重新运行；支持1～300秒，网络请求和SDK总超时均使用该限制。以命令最终输出的 `"status": "success"` 和 `"report_ready": true` 确认报告生成；只有采集状态的 HTML 不包含完整行情报告。成功后重新打开 `data/html/baostock-latest.html`，如需补导出，执行 `export-html`。
+
+批量接口持续超时时，若此前已保存过真实交易日快照，还可以使用个股历史接口恢复：
+
+```bash
+.venv/bin/python -m stock_daily run --date 20261009 --stock-history
+```
+
+恢复模式要求缓存基础信息的采集日期不早于报告日期，避免遗漏新上市股票。它通过最多两个独立连接逐只获取剩余窗口的未复权行情，总请求间隔仍遵守 `FREE_REQUEST_INTERVAL`；原始断点保存在 `data/history_cache/`，复用复权记录和已保存交易日。仍按原覆盖率、价格、基准和历史要求校验后才发布报告。停牌依据个股日线的交易状态，恢复模式和基础信息日期会显示在报告中。`--force` 会重新采集本次窗口的个股断点数据。当前恢复任务的日志可用 `tail -f data/resume_free_run.log` 查看。
+
 ## 免费真实行情与公告
 
 在 `.env` 中配置：
@@ -158,7 +172,7 @@ ENABLE_ANNOUNCEMENTS=false
 .venv/bin/python -m stock_daily export-html --source demo --output data/html/demo-preview.html
 ```
 
-真实源尚未发布报告时，最新导出会明确显示采集状态，不会代入示例行情。指定日期没有报告会报错，并保留原输出文件。文件标注导出时间和数据日期，已打开的文件不会自动获取行情；更新后需重新打开。
+真实源尚未发布报告时，最新导出会明确显示采集状态，不会代入示例行情。指定日期没有报告会报错，并保留原输出文件。文件标注导出时间和数据日期，已打开的文件不会自动获取行情；更新后重新打开，或点击“重载文件”读取当前文件内容。
 
 `.env` 设置 `EXPORT_HTML=true`（新配置默认开启）和 `HTML_REPORT_DIR=./data/html`，盘后报告与晚间公告更新成功后会自动生成 `数据源-YYYYMMDD.html` 和 `数据源-latest.html`。HTML写入失败会保留已发布的数据库报告，在任务记录提示，可通过CLI重试。修改配置后重启worker。
 

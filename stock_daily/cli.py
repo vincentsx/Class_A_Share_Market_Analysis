@@ -21,6 +21,7 @@ def main():
     daily = commands.add_parser("run", help="采集历史和当天行情，生成盘后报告")
     daily.add_argument("--date", help="YYYYMMDD，默认北京时间当天")
     daily.add_argument("--force", action="store_true", help="重新采集当天数据并替换该日报告及信号")
+    daily.add_argument("--stock-history", action="store_true", help="BaoStock 批量接口异常时，用缓存基础信息和个股历史断点恢复")
     demo = commands.add_parser("demo", help="生成醒目标记的合成数据和近期报告")
     demo.add_argument("--date", help="示例结束日期，默认最近的工作日")
     demo.add_argument("--days", type=int, default=30)
@@ -50,7 +51,16 @@ def main():
                 raise ValueError("--days 应为1～90")
         db = Database(settings.database_url)
         if args.command == "run":
-            result = run_daily(db, settings, args.date, args.force)
+            if args.stock_history:
+                from .history_recovery import make_recovery_provider
+
+                provider = make_recovery_provider(db, settings, args.date, args.force)
+                try:
+                    result = run_daily(db, settings, args.date, args.force, provider=provider)
+                finally:
+                    provider.close()
+            else:
+                result = run_daily(db, settings, args.date, args.force)
         elif args.command == "demo":
             end = parse_day(args.date) if args.date else now().date()
             provider = DemoProvider(settings)
@@ -103,6 +113,9 @@ def main():
                         connection.execute(delete(watchlist).where(watchlist.c.code == args.code))
                 result = {"status": "success", "code": args.code}
         print(json.dumps(result, ensure_ascii=False, indent=2))
+    except KeyboardInterrupt:
+        logging.warning("操作已中断；已保存的数据保留")
+        sys.exit(130)
     except Exception as error:
         message = str(error) if isinstance(error, (ValueError, RuntimeError)) else "程序异常，请查看任务记录"
         logging.error("%s", message)

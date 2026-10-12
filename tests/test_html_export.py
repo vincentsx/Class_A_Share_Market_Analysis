@@ -81,6 +81,43 @@ def test_empty_real_source_is_an_explicit_status_snapshot_not_demo(populated, tm
     assert data["histories"] == {}
 
 
+def test_failed_initial_acquisition_updates_latest_html_with_failure(db, settings, tmp_path):
+    config = replace(settings, source="baostock", export_html=True, html_report_dir=str(tmp_path))
+    path = tmp_path / "baostock-latest.html"
+    export_html(db, config, output=path)
+
+    class OfflineProvider:
+        def calendar(self, start, end):
+            raise DataError("网络接收错误测试")
+
+    with pytest.raises(DataError, match="网络接收错误测试"):
+        run_daily(db, config, "20261009", provider=OfflineProvider())
+    data = snapshot(path.read_text())
+    assert data["dashboard"]["report"] is None
+    assert data["histories"] == {}
+    assert data["dashboard"]["runs"][0]["status"] == "failed"
+    assert data["dashboard"]["runs"][0]["message"] == "网络接收错误测试"
+
+
+def test_failed_rerun_preserves_report_in_latest_html(populated, tmp_path, monkeypatch):
+    db, settings, provider = populated
+    config = replace(settings, export_html=True, html_report_dir=str(tmp_path))
+    original_report = db.latest_report(settings.source)
+    path = tmp_path / "demo-latest.html"
+    export_html(db, config, output=path)
+
+    def fail(day):
+        raise DataError("重新采集失败测试")
+
+    monkeypatch.setattr(provider, "fetch_day", fail)
+    with pytest.raises(DataError, match="重新采集失败测试"):
+        run_daily(db, config, "20261009", force=True, provider=provider)
+    data = snapshot(path.read_text())
+    assert data["dashboard"]["report"]["day"] == original_report["day"]
+    assert data["dashboard"]["report"]["candidates"] == original_report["candidates"]
+    assert data["dashboard"]["runs"][0]["status"] == "failed"
+
+
 def test_daily_success_exports_dated_and_latest_html(populated, tmp_path):
     db, settings, provider = populated
     config = replace(settings, export_html=True, html_report_dir=str(tmp_path))

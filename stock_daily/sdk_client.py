@@ -1,6 +1,7 @@
 """Bound uninterruptible third-party SDK calls with a disposable worker process."""
 
 import contextlib
+import logging
 import multiprocessing
 import os
 import socket
@@ -8,9 +9,13 @@ import time
 
 from .providers import DataError
 
+logger = logging.getLogger(__name__)
+
 
 def read_result(result, bulk=False):
     if result.error_code != "0":
+        if result.error_code == "10002007":
+            raise DataError("BaoStock 网络接收错误（错误码 10002007）")
         raise DataError(f"BaoStock 返回错误码 {result.error_code}")
     fields = result.fields
     if not isinstance(fields, list) or not fields or len(set(fields)) != len(fields):
@@ -47,7 +52,9 @@ def read_result(result, bulk=False):
 
 
 def sdk_worker(pipe, timeout):
-    socket.setdefaulttimeout(min(timeout, 30))
+    # Bulk daily responses can take over 30 seconds. Honor the configured limit;
+    # the parent process also enforces it and disposes of a stalled worker.
+    socket.setdefaulttimeout(timeout)
     logged_in = False
     # SDK progress bars and login messages must not contaminate CLI JSON output.
     with open(os.devnull, "w") as sink, contextlib.redirect_stdout(sink), contextlib.redirect_stderr(sink):
@@ -141,6 +148,7 @@ class SDKClient:
                 return response["rows"]
             except (DataError, EOFError, BrokenPipeError, OSError) as error:
                 detail = str(error) if isinstance(error, DataError) else "连接已中断"
+                logger.warning("%s 第%s/3次请求失败：%s", method, attempt + 1, detail)
                 self.close(graceful=False)  # A timed-out socket cannot be reused for the next request.
                 if attempt < 2:
                     time.sleep(2**attempt)

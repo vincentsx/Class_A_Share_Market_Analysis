@@ -14,7 +14,7 @@ const OFFLINE = offlineElement ? JSON.parse(offlineElement.textContent) : null;
 if (OFFLINE) {
   $("add-watch").hidden = true;
   $("date-select").disabled = true;
-  $("refresh").textContent = "↻ 重读快照";
+  $("refresh").textContent = "↻ 重载文件";
 }
 
 async function api(path, options = {}) {
@@ -54,14 +54,21 @@ async function load(day = "") {
     if (data.report) {
       $("date-select").value = data.report.day;
       const older = data.report.day !== (OFFLINE ? new Date().toLocaleDateString("sv-SE", {timeZone:"Asia/Shanghai"}).replaceAll("-", "") : data.today);
-      const recentFailure = data.runs.find((r) => r.kind === "daily" && r.status === "failed" && r.day >= data.report.day);
-      message(recentFailure ? `最近采集失败：${recentFailure.message}。当前显示 ${dateLabel(data.report.day)} 的已保存报告。` : older ? `当前显示 ${dateLabel(data.report.day)} 的历史报告，数据截止于该日。` : "", !!recentFailure);
+      const recentTask = data.runs.find((r) => r.kind === "daily" && r.status !== "skipped" && r.day >= data.report.day);
+      const recentFailure = recentTask?.status === "failed" ? recentTask : null;
+      const reportNotice = recentFailure ? `最近采集失败：${recentFailure.message}。当前显示 ${dateLabel(data.report.day)} 的已保存报告。` : older ? `当前显示 ${dateLabel(data.report.day)} 的历史报告，数据截止于该日。` : "";
+      message([reportNotice, ...(data.report.data_notes || [])].filter(Boolean).join(" "), !!recentFailure);
       renderReport(data);
       renderWatch(data.watchlist);
     } else {
-      const failure = data.runs.find((r) => r.status === "failed");
+      const failure = data.runs.find((r) => r.kind === "daily" && r.status === "failed");
       const active = data.runs.find((r) => r.kind === "daily" && r.status === "running");
       const progress = data.source === "baostock" && data.factor_histories ? `；已完成 ${data.factor_histories} 只股票的历史复权核对` : "";
+      $("empty-title").textContent = active ? "正在采集，报告尚未发布。" : failure ? "采集失败，尚未生成报告。" : "第一份复盘，等待生成。";
+      $("empty-help").textContent = active ? (OFFLINE ? "这是导出时的采集状态；任务成功后需重新导出并打开文件。" : "完成历史补齐和数据校验后将显示报告，请勿重复启动任务。") : failure ? "进程结束不代表采集成功。已保存的历史可复用，修复接口问题后执行下方命令继续；成功后重新打开导出的HTML。" : data.source === "demo" ? "初始化合成示例后即可浏览。" : "请运行盘后采集。非交易日用 --date 指定实际交易日，首次需要补齐历史。";
+      const task = active || failure;
+      $("empty-command").textContent = `.venv/bin/python -m stock_daily ${data.source === "demo" ? "demo" : "run"}${task ? ` --date ${task.day}` : ""}`;
+      $("empty-command").hidden = !!active;
       message(active ? `${OFFLINE ? "导出时正在采集" : "正在采集"} ${dateLabel(active.day)} 的${data.source === "demo" ? "合成示例" : "真实行情"}：${active.message}${progress}。${OFFLINE ? "本文件尚无已发布报告，采集完成后需重新导出。" : "完成数据校验后将显示报告。"}` : failure ? `最近任务失败：${failure.message}` : "", !active && !!failure);
     }
     if (currentView === "tracking") await loadTracking();
@@ -157,7 +164,7 @@ document.querySelectorAll("[data-strategy]").forEach((b) => b.addEventListener("
 $("candidate-search").addEventListener("input",renderCandidates);
 $("candidate-table").addEventListener("click",(e) => {const b=e.target.closest(".row-detail");if(b)showDetail(b.dataset.code,b.dataset.rule);});
 $("date-select").addEventListener("change",() => load($("date-select").value));
-$("refresh").addEventListener("click",() => load());
+$("refresh").addEventListener("click",() => OFFLINE ? window.location.reload() : load());
 $("method-button").addEventListener("click",() => $("method-dialog").showModal());
 $("mobile-method").addEventListener("click",() => $("method-dialog").showModal());
 $("add-watch").addEventListener("click",() => {$("watch-error").textContent="";$("watch-dialog").showModal();});
