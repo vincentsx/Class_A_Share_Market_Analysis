@@ -36,6 +36,7 @@
       {% if offline %}<div class="notice"><b>本地离线快照 · 只读</b><span>导出于 {{ exported_at }}。内容截止于所标日期，文件不会自动获取行情；重新导出后再打开查看更新。</span></div>{% endif %}
       {% if not offline %}<div class="notice"><b>每日三次 · HTML与PNG</b><span>11:35午间快照 / 15:05收盘快照 / 20:30日线分析。<a href="/artifacts/{{ source }}-latest.html" target="_blank" rel="noopener">查看最新HTML</a> · <a href="/artifacts/{{ source }}-latest.png" target="_blank" rel="noopener">查看最新PNG</a>。下方工作台显示已核验的日线报告。</span></div>{% endif %}
       <div id="message" class="notice" role="status" hidden></div>
+      {% if not offline %}<div id="email-status" class="notice" role="status" hidden></div>{% endif %}
       <div id="empty" class="empty-state" hidden><div class="empty-icon">◫</div><h2 id="empty-title">第一份复盘，等待生成。</h2><p id="empty-help">{{ '初始化合成示例后即可浏览。' if source == 'demo' else '请运行盘后采集。非交易日用 --date 指定实际交易日，首次需要补齐历史。' }}</p><code id="empty-command">.venv/bin/python -m stock_daily {{ 'demo' if source == 'demo' else 'run' }}</code>{% if source == 'baostock' %}<p>BaoStock 覆盖的沪深A股，不含北交所；公告由 AKShare 补查。</p>{% endif %}</div>
       <div id="report-content" hidden>
         <section id="view-overview" class="view">

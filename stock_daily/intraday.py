@@ -212,8 +212,11 @@ def run_snapshot(db, settings, day=None, slot="midday", feed=None, provider=None
                 db.upsert(connection, snapshots, {"source": settings.source, "day": day,
                                                   "slot": slot, "payload": payload})
             artifacts = export_snapshot(payload, settings) if settings.export_html or settings.export_png else {}
+            from .mailer import enqueue_safely
+
+            email = enqueue_safely(db, settings, day, slot, artifacts.get('html'), artifacts.get('png'), payload)
             db.finish_run(identifier, "success", f"{LABELS[slot]}已生成：{len(payload['quotes'])}只有效报价；HTML/PNG按配置导出")
-            return {"status": "success", "day": day, "slot": slot, "count": len(payload["quotes"]), **artifacts}
+            return {"status": "success", "day": day, "slot": slot, "count": len(payload["quotes"]), "email": email, **artifacts}
     except (Exception, KeyboardInterrupt) as error:
         message = str(error) if isinstance(error, (DataError, ValueError)) else "实时快照采集或导出失败，请查看日志"
         db.finish_run(identifier, "failed", message)

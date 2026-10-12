@@ -47,6 +47,16 @@ async function load(day = "") {
     const data = await api(`/api/dashboard${day ? `?day=${encodeURIComponent(day)}` : ""}`);
     if (id !== refreshId) return;
     state = data;
+    const emailStatus = $("email-status");
+    if (emailStatus) {
+      const mail = data.email;
+      emailStatus.hidden = !mail?.enabled;
+      if (mail?.enabled) {
+        const errors = mail.configuration_errors || [];
+        const counts = (mail.items || []).reduce((result, item) => { result[item.status] = (result[item.status] || 0) + 1; return result; }, {});
+        emailStatus.textContent = errors.length ? `报告邮件尚未配置完整：${errors.join("、")}。请在本地.env填写；分析结果仍正常保存。` : `报告邮件已开启：最近30封中 ${counts.sent || 0} 封获SMTP接收、${(counts.pending || 0) + (counts.sending || 0)} 封待发、${counts.failed || 0} 封失败。发送记录见任务列表，详情可运行 mail-status 查看。`;
+      }
+    }
     $("demo-banner").hidden = data.source !== "demo";
     $("empty").hidden = !!data.report;
     $("report-content").hidden = !data.report;
@@ -111,7 +121,7 @@ function renderReport(data) {
   const events = report.events.filter((e) => e.tags.length).slice(0,8);
   $("event-list").innerHTML = events.length ? events.map((e) => `<div class="list-entry">${eventLink(e)}<p>${esc(e.code)} · ${dateLabel(e.day)} · ${esc(e.tags.join(" / "))}</p></div>`).join("") : `<div class="list-entry muted">${report.event_status === "available" ? "已采集公告中暂无命中关键词的标题；不代表没有风险。" : "公告未启用或不可用，暂无法完成事件风险核验。"}</div>`;
   const labels = {success:"成功",failed:"失败",running:"运行中",skipped:"跳过"};
-  const kinds = {daily:"日线分析", announcements:"公告补查", midday:"午间快照", close:"收盘快照", evening:"晚间分析"};
+  const kinds = {daily:"日线分析", announcements:"公告补查", midday:"午间快照", close:"收盘快照", evening:"晚间分析", email_queue:"邮件排队", email:"报告发信"};
   $("run-list").innerHTML = data.runs.slice(0,4).map((r) => `<div class="list-entry"><div class="run-title"><span class="run-state ${esc(r.status)}">${labels[r.status] || esc(r.status)}</span><span>${esc(kinds[r.kind] || r.kind)}</span><span class="muted">${timeLabel(r.started_at)}</span></div><p>${esc(r.message)}</p></div>`).join("") || '<div class="list-entry muted">暂无任务记录</div>';
 }
 function eventLink(event) {

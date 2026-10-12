@@ -35,6 +35,15 @@ class Settings:
     export_html: bool = False
     export_png: bool = False
     html_report_dir: str = "./data/html"
+    email_enabled: bool = False
+    smtp_host: str = "smtp.gmail.com"
+    smtp_port: int = 465
+    smtp_security: str = "ssl"
+    smtp_username: str = ""
+    smtp_password: str = ""
+    mail_to: str = ""
+    smtp_timeout: float = 20
+    mail_max_mb: int = 20
 
     @classmethod
     def from_env(cls):
@@ -60,6 +69,15 @@ class Settings:
             export_html=os.getenv("EXPORT_HTML", "true").lower() == "true",
             export_png=os.getenv("EXPORT_PNG", "true").lower() == "true",
             html_report_dir=os.getenv("HTML_REPORT_DIR", "./data/html"),
+            email_enabled=os.getenv("EMAIL_ENABLED", "false").lower() == "true",
+            smtp_host=os.getenv("SMTP_HOST", "smtp.gmail.com").strip(),
+            smtp_port=int(os.getenv("SMTP_PORT", "465")),
+            smtp_security=os.getenv("SMTP_SECURITY", "ssl").lower(),
+            smtp_username=os.getenv("SMTP_USERNAME", "").strip(),
+            smtp_password=os.getenv("SMTP_PASSWORD", ""),
+            mail_to=os.getenv("MAIL_TO", "").strip(),
+            smtp_timeout=float(os.getenv("SMTP_TIMEOUT", "20")),
+            mail_max_mb=int(os.getenv("MAIL_MAX_MB", "20")),
         )
         if config.source not in {"demo", "tushare", "baostock"}:
             raise ValueError("DATA_SOURCE 必须是 demo、baostock 或 tushare")
@@ -75,6 +93,10 @@ class Settings:
             raise ValueError("MIDDAY_TIME 必须在11:30～12:59，避免把下午行情当成午间行情")
         if not "15:00" <= config.schedule_time < config.announcement_time:
             raise ValueError("SCHEDULE_TIME 必须在15:00之后且早于 ANNOUNCEMENT_TIME")
+        if config.smtp_security not in {"ssl", "starttls"} or not 1 <= config.smtp_port <= 65535:
+            raise ValueError("SMTP_SECURITY 必须为ssl或starttls，SMTP_PORT需为有效端口")
+        if not 1 <= config.smtp_timeout <= 60 or not 1 <= config.mail_max_mb <= 50:
+            raise ValueError("SMTP_TIMEOUT需为1～60秒，MAIL_MAX_MB需为1～50")
         if config.database_url.startswith("sqlite:///./"):
             Path(config.database_url.removeprefix("sqlite:///")).parent.mkdir(parents=True, exist_ok=True)
         return config

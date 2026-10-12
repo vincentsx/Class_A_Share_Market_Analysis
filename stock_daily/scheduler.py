@@ -75,6 +75,7 @@ def run_evening(db, settings, day):
             # report needs its evening refresh, preserving original signal evidence.
             refresh_events(db, config, day)
         artifacts = None
+        email = {"status": "disabled"}
         if settings.export_html or settings.export_png:
             artifacts = export_published(db, settings, day)
             path = Path(artifacts["path"])
@@ -82,8 +83,12 @@ def run_evening(db, settings, day):
             atomic_write(slot_path, path.read_text())
             if settings.export_png:
                 publish_latest_png(path.with_suffix(".png"), slot_path.with_suffix(".png"))
+            from .mailer import enqueue_safely
+
+            email = enqueue_safely(db, settings, day, "evening", slot_path, slot_path.with_suffix(".png"),
+                                   db.latest_report(settings.source, day))
         db.finish_run(identifier, "success", "晚间日线分析已完成；公告按配置核验；HTML/PNG按配置导出")
-        return {"status": "success", "day": day, "artifacts": artifacts}
+        return {"status": "success", "day": day, "artifacts": artifacts, "email": email}
     except (Exception, KeyboardInterrupt):
         db.finish_run(identifier, "failed", "晚间分析、公告或导出未完成；已保存数据保留，请查看对应任务及日志")
         raise
@@ -113,4 +118,11 @@ def worker(db, settings):
                         run_snapshot(db, settings, day, kind)
                 except Exception:
                     logger.exception("%s 任务失败；时段内15分钟后重试，最多4次", kind)
+        if settings.email_enabled:
+            from .mailer import flush_outbox
+
+            try:
+                flush_outbox(db, settings)
+            except Exception:
+                logger.warning("邮件处理未完成，请检查本地邮箱配置；分析结果已保留")
         stopped.wait(30)

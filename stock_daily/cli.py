@@ -45,6 +45,17 @@ def main():
     saved_snapshot = commands.add_parser("export-snapshot", help="重新导出已保存实时快照的HTML/PNG，不重新请求行情")
     saved_snapshot.add_argument("--date", help="YYYYMMDD，默认最新快照日期")
     saved_snapshot.add_argument("--slot", choices=("midday", "close"), help="指定快照时段")
+    mail_preview = commands.add_parser("mail-preview", help="生成带HTML和PNG附件的本地.eml邮件预览，不发信")
+    mail_preview.add_argument("--date", help="YYYYMMDD，默认所选时段最新已发布日期")
+    mail_preview.add_argument("--slot", choices=("midday", "close", "evening"), default="midday")
+    mail_preview.add_argument("--output", default="data/mail-preview.eml")
+    commands.add_parser("mail-setup", help="在本地交互填写Gmail配置，密码输入不回显，不发送邮件")
+    mail_send = commands.add_parser("mail-send", help="发送已有HTML/PNG报告，不重新采集行情")
+    mail_send.add_argument("--date")
+    mail_send.add_argument("--slot", choices=("midday", "close", "evening"), default="midday")
+    commands.add_parser("mail-status", help="查看脱敏后的邮箱配置检查和发信队列状态")
+    mail_retry = commands.add_parser("mail-retry", help="重试指定失败邮件，不重新运行分析")
+    mail_retry.add_argument("--id", required=True, help="mail-status显示的邮件ID")
     watch = commands.add_parser("watch", help="管理自选股")
     watch.add_argument("action", choices=("add", "remove", "list"))
     watch.add_argument("code", nargs="?")
@@ -107,6 +118,35 @@ def main():
             from .intraday import export_saved_snapshot
 
             result = export_saved_snapshot(db, settings, args.date, args.slot)
+        elif args.command == "mail-setup":
+            from .mailer import configure_gmail
+
+            result = configure_gmail(settings)
+        elif args.command == "mail-preview":
+            from .mailer import preview_report
+
+            result = preview_report(db, settings, args.date, args.slot, args.output)
+        elif args.command == "mail-status":
+            from .mailer import outbox_status
+
+            result = outbox_status(db, settings)
+        elif args.command == "mail-retry":
+            from .mailer import retry_message
+
+            result = retry_message(db, settings, args.id)
+        elif args.command == "mail-send":
+            from .db import mail_outbox
+            from .mailer import enqueue_report, flush_outbox, require_configuration, saved_artifacts
+
+            require_configuration(settings)
+            day, html_path, png_path, details = saved_artifacts(db, settings, args.date, args.slot)
+            queued = enqueue_report(db, settings, day, args.slot, html_path, png_path, details)
+            delivery = flush_outbox(db, settings, identifier=queued['id'])
+            record = db.rows(select(mail_outbox.c.status, mail_outbox.c.last_error)
+                             .where(mail_outbox.c.id == queued['id']))[0]
+            result = {"id": queued['id'], **record, "delivery": delivery}
+            if record['status'] == 'failed':
+                raise RuntimeError(record['last_error'])
         elif args.command == "worker":
             worker(db, settings)
             return

@@ -31,6 +31,9 @@ def dashboard(db, settings, day=None):
         "schedule_time": settings.schedule_time,
         "announcement_time": settings.announcement_time,
     }
+    from .mailer import outbox_status
+
+    data['email'] = outbox_status(db, settings)
     if settings.source == "baostock":
         data["factor_histories"] = db.rows(
             select(func.count().label("count")).select_from(provider_cache).where(provider_cache.c.source == "baostock")

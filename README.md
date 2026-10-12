@@ -94,6 +94,68 @@ Docker镜像也包含Chromium及中文字体。初次安装浏览器需要联网
 
 重新导出指定历史快照会把它设为 `latest`，请以文件内日期和时间为准。采集成功而图片导出失败时，原数据仍保留；安装浏览器或修复写入权限后，用上述导出命令重试。电脑仍需保持开机、不休眠、联网，worker持续运行；文件本身不会执行定时任务。
 
+## Gmail自动发送报告邮件
+
+邮件功能默认关闭。配置完成并重启worker后，11:35、15:05、20:30任务成功生成HTML和PNG时，各自排入一封报告邮件，再由worker发送。任务时间是开始采集时间，邮件会在采集与导出完成后发送。分析或导出失败不会发送尚未完成的报告；邮箱配置、认证或连接失败不会使已经生成的分析结果失效。
+
+### 配置 Gmail
+
+1. 在Google账号开启“两步验证”，然后[创建应用专用密码](https://myaccount.google.com/apppasswords)，名称可填“股票报告”。本功能使用应用专用密码；账号登录密码不适用。部分组织账号、仅安全密钥的两步验证或高级保护账号可能没有此入口，具体参见[Google官方说明](https://support.google.com/accounts/answer/185833)。当前实现使用SMTP授权，不包含Google OAuth登录。
+2. 在项目终端执行本地配置命令，输入发件Gmail地址、收件地址和应用专用密码。收件地址留空时使用发件地址。密码输入不显示，直接保存到权限为600的本地 `.env`，不会写进报告、日志或Git：
+
+```bash
+cd /home/vincent/code/ai_gaoqian
+.venv/bin/python -m stock_daily mail-setup
+```
+
+该命令只保存配置，不发送邮件；自动填写Gmail SMTP SSL连接。也可以手动在 `.env` 中设置：
+
+```dotenv
+EMAIL_ENABLED=true
+SMTP_HOST=smtp.gmail.com
+SMTP_PORT=465
+SMTP_SECURITY=ssl
+SMTP_USERNAME=你的Gmail地址
+SMTP_PASSWORD=你的16字符应用专用密码
+MAIL_TO=你的收件邮箱地址
+SMTP_TIMEOUT=20
+MAIL_MAX_MB=20
+EXPORT_HTML=true
+EXPORT_PNG=true
+```
+
+应用专用密码分组显示的空格会在发信时移除。收件地址可以与发件地址相同，当前支持一个收件地址。Gmail可使用465/SSL；若网络只允许587，可改为 `SMTP_PORT=587`、`SMTP_SECURITY=starttls`，认证在TLS建立后进行，不使用明文SMTP。[Google应用发信设置](https://support.google.com/a/answer/176600)
+
+3. 发送已有午间报告，验证真实收件。此命令直接读取新配置，不需要重新采集行情：
+
+```bash
+.venv/bin/python -m stock_daily mail-send --slot midday
+# 指定已有报告日期及另一个时段
+.venv/bin/python -m stock_daily mail-send --date 20261012 --slot close
+.venv/bin/python -m stock_daily mail-send --date 20261009 --slot evening
+```
+
+设置好后重启worker，才会让持续运行的进程读取新配置。如果用 `bash scripts/run_local.sh` 启动，先在启动终端按Ctrl+C，再重新运行脚本；不要重复启动多个worker。此前已经成功的时段不会因为刚开启邮件而自动重跑，需要使用上面的 `mail-send` 补发。
+
+### 预览、状态及重试
+
+不配置账号也能生成本地邮件预览，里面包含真实已保存报告的HTML与PNG，未配置地址时使用明确的占位地址，不联网、不发送：
+
+```bash
+.venv/bin/python -m stock_daily mail-preview --slot midday --output data/mail-preview.eml
+.venv/bin/python -m stock_daily mail-status
+# 从mail-status取得失败邮件的id；只重新发信，不重新执行分析
+.venv/bin/python -m stock_daily mail-retry --id 邮件id
+```
+
+同一数据源、日期、时段和收件地址只创建一条邮件记录，重复执行不会重复发送已成功邮件。排队时将完整MIME邮件（含附件）保存在数据库 `mail_outbox`，后续重试发送当时的版本，不读取可能已经变化的 `latest` 文件。成功后清除队列里的附件副本，保留发送记录；原HTML和PNG仍保留。
+
+发送失败每15分钟重试，最多4次，跨服务重启保留。用 `mail-retry` 可以重置指定失败邮件的次数并立即重试；发送中或已经成功的邮件不能被这个命令重发。更换 `MAIL_TO` 后不会把旧收件地址的队列发给新地址。
+
+`sent` 表示SMTP服务器确认接收，不等于收件箱已投递；首次发送请检查收件箱和垃圾邮件。连接中断或进程在接收确认后崩溃时，SMTP无法保证只投递一次，重试可能出现相同Message-ID的重复邮件。整封邮件编码后默认限20MiB，超限明确记录而不发送。网页任务列表和 `mail-status` 显示发送结果，不显示SMTP密码。
+
+电脑需要保持开机、worker运行并能连接Gmail的SMTP服务器；没有worker时，可用 `mail-send` / `mail-retry` 手动处理。邮件收到后，即使运行分析的电脑关机，仍能查看附件。修改Google账号密码可能撤销应用专用密码，需更新 `.env` 并重启worker。[Google说明](https://support.google.com/accounts/answer/185833)
+
 ## 本地真实运行一次
 
 以下步骤适用于已经安装依赖的当前项目。保留已有 `.env`，确认 `DATA_SOURCE=baostock`，即可使用免费真实行情，无需 Tushare 积分。

@@ -7,6 +7,7 @@ from sqlalchemy import (
     Column,
     Float,
     Integer,
+    LargeBinary,
     MetaData,
     String,
     Table,
@@ -24,6 +25,24 @@ from sqlalchemy.exc import IntegrityError
 from .config import now
 
 metadata = MetaData()
+mail_outbox = Table(
+    "mail_outbox", metadata,
+    Column("id", String(64), primary_key=True),
+    Column("source", String(20), nullable=False),
+    Column("day", String(8), nullable=False),
+    Column("slot", String(20), nullable=False),
+    Column("recipient", String(320), nullable=False),
+    Column("status", String(20), nullable=False),
+    Column("attempts", Integer, nullable=False),
+    Column("message", LargeBinary, nullable=False),
+    Column("message_id", String(150), nullable=False),
+    Column("subject", String(300), nullable=False),
+    Column("created_at", String(40), nullable=False),
+    Column("next_attempt_at", String(40), nullable=False),
+    Column("last_attempt_at", String(40)),
+    Column("sent_at", String(40)),
+    Column("last_error", Text, nullable=False),
+)
 snapshots = Table(
     "snapshots", metadata,
     Column("source", String(20), primary_key=True),
