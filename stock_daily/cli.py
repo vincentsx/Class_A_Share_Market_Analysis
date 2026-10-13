@@ -49,6 +49,10 @@ def main():
     news_refresh = commands.add_parser("news-refresh", help="为当天已保存快照补充新闻，明确标记补采时间，不重新请求行情或发信")
     news_refresh.add_argument("--date", help="YYYYMMDD，默认北京时间当天")
     news_refresh.add_argument("--slot", choices=("midday", "close"), default="close")
+    pages = commands.add_parser("export-pages", help="生成脱敏公开报告网站，不联网、不发布")
+    pages.add_argument("--output", default="data/pages")
+    publish = commands.add_parser("publish-pages", help="上传脱敏网站并触发已配置的GitHub Pages部署")
+    publish.add_argument("--repo", help="GitHub owner/repository，默认PAGES_REPOSITORY")
     mail_preview = commands.add_parser("mail-preview", help="生成带HTML和PNG附件的本地.eml邮件预览，不发信")
     mail_preview.add_argument("--date", help="YYYYMMDD，默认所选时段最新已发布日期")
     mail_preview.add_argument("--slot", choices=("midday", "close", "evening"), default="midday")
@@ -130,6 +134,14 @@ def main():
             from .news import refresh_snapshot_news
 
             result = refresh_snapshot_news(db, settings, args.date, args.slot)
+        elif args.command == "export-pages":
+            from .pages import export_pages
+
+            result = export_pages(db, settings, args.output)
+        elif args.command == "publish-pages":
+            from .pages import publish_pages
+
+            result = publish_pages(db, settings, args.repo or settings.pages_repository)
         elif args.command == "mail-setup":
             from .mailer import configure_gmail
 

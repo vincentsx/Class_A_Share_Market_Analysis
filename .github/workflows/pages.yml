@@ -1,0 +1,44 @@
+name: Publish reports to GitHub Pages
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: github-pages
+  cancel-in-progress: false
+
+jobs:
+  deploy:
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Configure Pages
+        uses: actions/configure-pages@v5
+      - name: Download public report bundle
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPORT_REPOSITORY: ${{ github.repository }}
+        run: |
+          gh release download pages-report-data --repo "$REPORT_REPOSITORY" --pattern site.tar.gz
+          mkdir site
+          python3 - <<'PY'
+          import tarfile
+          with tarfile.open('site.tar.gz') as archive:
+              archive.extractall('site', filter='data')
+          PY
+          test -f site/index.html
+          test -f site/manifest.json
+      - name: Upload website
+        uses: actions/upload-pages-artifact@v4
+        with:
+          path: site
+      - name: Deploy website
+        id: deployment
+        uses: actions/deploy-pages@v4

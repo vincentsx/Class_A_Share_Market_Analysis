@@ -47,6 +47,9 @@ class Settings:
     mail_to: str = ""
     smtp_timeout: float = 20
     mail_max_mb: int = 20
+    pages_enabled: bool = False
+    pages_repository: str = ""
+    pages_retain_days: int = 5
 
     @classmethod
     def from_env(cls):
@@ -84,6 +87,9 @@ class Settings:
             mail_to=os.getenv("MAIL_TO", "").strip(),
             smtp_timeout=float(os.getenv("SMTP_TIMEOUT", "20")),
             mail_max_mb=int(os.getenv("MAIL_MAX_MB", "20")),
+            pages_enabled=os.getenv("PAGES_ENABLED", "false").lower() == "true",
+            pages_repository=os.getenv("PAGES_REPOSITORY", "").strip(),
+            pages_retain_days=int(os.getenv("PAGES_RETAIN_DAYS", "5")),
         )
         if config.source not in {"demo", "tushare", "baostock"}:
             raise ValueError("DATA_SOURCE 必须是 demo、baostock 或 tushare")
@@ -105,6 +111,8 @@ class Settings:
             raise ValueError("SMTP_SECURITY 必须为ssl或starttls，SMTP_PORT需为有效端口")
         if not 1 <= config.smtp_timeout <= 60 or not 1 <= config.mail_max_mb <= 50:
             raise ValueError("SMTP_TIMEOUT需为1～60秒，MAIL_MAX_MB需为1～50")
+        if not 1 <= config.pages_retain_days <= 20:
+            raise ValueError("PAGES_RETAIN_DAYS需为1～20个报告日期")
         if config.database_url.startswith("sqlite:///./"):
             Path(config.database_url.removeprefix("sqlite:///")).parent.mkdir(parents=True, exist_ok=True)
         return config

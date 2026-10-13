@@ -19,7 +19,7 @@
     <div class="workspace-label">研究工作台</div>
     <nav aria-label="主导航">
       <button class="nav-item active" data-view="overview"><span>◫</span>每日复盘</button>
-      <button class="nav-item" data-view="watch"><span>☆</span>我的自选</button>
+      <button class="nav-item" data-view="watch"{% if public_report %} hidden{% endif %}><span>☆</span>我的自选</button>
       <button class="nav-item" data-view="tracking"><span>⌁</span>信号跟踪</button>
     </nav>
     <div class="sidebar-note"><span class="status-dot"></span> 盘后研究 · 几天至几周<p>从数据到依据，<br>让每一次观察都有记录。</p></div>

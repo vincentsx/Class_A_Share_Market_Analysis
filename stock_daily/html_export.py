@@ -41,7 +41,7 @@ def atomic_write(path, content):
             Path(temporary).unlink()
 
 
-def export_html(db, settings, day=None, output=None):
+def daily_payload(db, settings, day=None, public=False):
     if day:
         parse_day(day)
     data = dashboard(db, settings, day)
@@ -50,6 +50,10 @@ def export_html(db, settings, day=None, output=None):
         raise DataError(f"{settings.source} 没有 {day} 的已发布报告；未替换输出文件")
     # Export one report date. Tracking is a separate snapshot through its stated cutoff.
     data["dates"] = [report["day"]] if report else []
+    if public:
+        data["watchlist"] = []
+        data["runs"] = []
+        data.pop("email", None)
     histories = {}
     if report:
         codes = {c["code"] for c in report["candidates"]}
@@ -63,11 +67,16 @@ def export_html(db, settings, day=None, output=None):
     observations = tracking(db, settings, as_of=report["day"] if report else None)
     if report:
         observations["method"] += f" 观察数据截止于 {report['day']}。"
-    payload = {"dashboard": data, "tracking": observations, "histories": histories, "exported_at": now().isoformat()}
+    return {"dashboard": data, "tracking": observations, "histories": histories,
+            "exported_at": now().isoformat(), "public": public}
+
+
+def render_daily(payload, settings):
     environment = Environment(loader=FileSystemLoader(ASSETS / "templates"), autoescape=select_autoescape(["html"]))
     template_helpers(environment)
     text = environment.get_template("index.html").render(
         source=settings.source,
+        public_report=payload.get("public", False),
         offline=True,
         nonce=secrets.token_urlsafe(24),
         exported_at=now().strftime("%Y-%m-%d %H:%M（北京时间）"),
@@ -76,6 +85,13 @@ def export_html(db, settings, day=None, output=None):
         javascript=(ASSETS / "static/app.js").read_text(),
         snapshot=script_json(payload),
     )
+    return text
+
+
+def export_html(db, settings, day=None, output=None):
+    payload = daily_payload(db, settings, day)
+    text = render_daily(payload, settings)
+    report = payload["dashboard"]["report"]
     destination = Path(output or Path(settings.html_report_dir) / f"{settings.source}-latest.html").resolve()
     if destination.suffix.lower() != ".html":
         raise DataError("HTML 输出文件必须以 .html 结尾")

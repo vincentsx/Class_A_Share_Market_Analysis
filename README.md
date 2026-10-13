@@ -396,6 +396,59 @@ worker 使用 `Asia/Shanghai`，默认11:35午间快照、15:05收盘快照、20
 
 只读 API：`/health`、`/api/dashboard?day=YYYYMMDD`、`/api/report/{day}`、`/api/report/{day}/download`、`/api/stocks/{code}/history?day=YYYYMMDD`、`/api/tracking`、`/api/watchlist`。自选股 POST/DELETE 要求 `Authorization: Bearer APP_API_KEY`。网页不存储管理密钥。
 
+## GitHub Pages：固定公网报告链接
+
+网站由本机使用已保存数据生成，GitHub Pages负责托管；手机和电脑访问同一网址。电脑关机不影响已发布报告的访问，新数据采集和上传仍需要本机worker运行。GitHub Pages不能运行本项目的Python采集服务。
+
+部署步骤基于[GitHub官方Pages工作流说明](https://docs.github.com/en/pages/getting-started-with-github-pages/using-custom-workflows-with-github-pages)。
+
+公开网站有最新报告、午间/收盘/日线入口、最近5个报告日期的归档及HTML/PNG下载。它使用单独渲染的公开版：移除个人自选、备注、快讯的自选标记、邮件队列和本机任务记录；市场、新闻、行业与量价清单保留。公开图片也从公开HTML重新渲染，不会复制包含自选的邮件附件。`.env`、数据库和原邮件附件不会上传。
+
+### 首次启用
+
+1. 安装并登录GitHub CLI：`gh auth login`。运行账号需要仓库写入和工作流权限，Pages设置需要仓库管理权限。本仓库为公开仓库，可用GitHub Free的Pages。
+2. 将包含 `.github/workflows/pages.yml` 的代码提交并推送到GitHub的 `main` 分支。
+3. 在GitHub仓库 **Settings → Pages → Build and deployment → Source** 选择 **GitHub Actions**。也可以只在首次启用时执行：
+
+```bash
+gh api --method POST repos/vincentsx/Class_A_Share_Market_Analysis/pages -f build_type=workflow
+```
+
+若Pages已存在，使用网页设置，或将上述API的 `POST` 改为 `PUT` 更新，不能重复创建。
+
+4. 先生成本地公开网站并检查，再首次发布：
+
+```bash
+# 仅导出，不联网、不发送邮件、不改变现有HTML/PNG
+.venv/bin/python -m stock_daily export-pages
+python3 -m http.server 8080 --bind 127.0.0.1 --directory data/pages
+# 浏览器打开 http://127.0.0.1:8080；检查后Ctrl+C结束预览
+
+# 上传公开数据，触发GitHub Actions部署
+.venv/bin/python -m stock_daily publish-pages --repo vincentsx/Class_A_Share_Market_Analysis
+gh run list --repo vincentsx/Class_A_Share_Market_Analysis --workflow pages.yml --limit 1
+# 使用上一步的运行ID等待部署，成功后再打开公网网址
+gh run watch 运行ID --repo vincentsx/Class_A_Share_Market_Analysis --exit-status
+```
+
+默认公网地址为 `https://vincentsx.github.io/Class_A_Share_Market_Analysis/`。固定入口为 `latest.html`、`midday.html`、`close.html`、`evening.html`；尚未生成的时段不创建入口。首次部署完成前可能返回404。绑定自定义域名后，以Actions部署结果中的网址为准。
+
+### 持续自动更新
+
+首次部署成功后，在本地 `.env` 增加并重启worker：
+
+```dotenv
+PAGES_ENABLED=true
+PAGES_REPOSITORY=vincentsx/Class_A_Share_Market_Analysis
+PAGES_RETAIN_DAYS=5
+```
+
+worker每10分钟在行情任务和邮件处理之后检查一次：数据或渲染代码有变化时发布；未变化的报告复用已验证的公开PNG，已成功部署的相同内容不重复上传。部署失败会在后续检查重试。`PAGES_RETAIN_DAYS`为1～20个有报告的日期，默认5；本机数据库和邮件附件保留不受此设置影响。执行worker的系统账号也必须能运行已登录的 `gh`；Docker容器不会自动继承宿主机的gh登录。
+
+发布使用固定的预发布Release `pages-report-data` 保存 `site.tar.gz`，每次替换该公开资源，再触发 `pages.yml` 下载并部署。报告大文件不进入Git提交历史。这个Release是公开数据的一部分。Pages部署仅需要GitHub Actions的内置Token，不需要在GitHub配置SMTP密码、数据Token或数据库。上传、工作流和网站上线是三个阶段，命令返回 `dispatched` 仅表示已触发工作流，上线以Actions成功为准。
+
+没有报告时拒绝发布空站点；构建/图片失败保留上一版公开网站；发布失败保留此前已上线页面。网站显示真实报告日期、行情采集时间及新闻截止时间，不把旧报告标为实时行情。公网访问速度需在实际使用的手机和电脑网络下验证。
+
 ## Docker 部署
 
 先创建 `.env`。SQLite版无需单独数据库，数据保存在持久卷，默认仅绑定服务器回环地址：

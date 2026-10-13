@@ -96,6 +96,7 @@ def run_evening(db, settings, day):
 
 def worker(db, settings):
     stopped = threading.Event()
+    pages_checked_at = None
     for signum in (signal.SIGINT, signal.SIGTERM):
         signal.signal(signum, lambda *_: stopped.set())
     from .intraday import run_snapshot
@@ -132,4 +133,13 @@ def worker(db, settings):
                 flush_outbox(db, settings)
             except Exception:
                 logger.warning("邮件处理未完成，请检查本地邮箱配置；分析结果已保留")
+        if settings.pages_enabled and (pages_checked_at is None or now() - pages_checked_at >= timedelta(minutes=10)):
+            from .pages import publish_pages
+
+            pages_checked_at = now()
+            try:
+                result = publish_pages(db, settings, settings.pages_repository)
+                logger.info("GitHub Pages：%s", result["status"])
+            except Exception:
+                logger.warning("GitHub Pages发布未完成；报告和邮件已保留，10分钟后重试", exc_info=True)
         stopped.wait(30)

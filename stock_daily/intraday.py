@@ -138,18 +138,24 @@ def build_snapshot(db, settings, day, slot, quotes, missing, stocks, metadata_at
     return payload
 
 
-def export_snapshot(payload, settings):
-    folder = Path(settings.html_report_dir)
+def render_snapshot(payload, settings):
     cutoff = payload.get("scheduled_time") or (settings.midday_time if payload["slot"] == "midday" else settings.schedule_time)
-    path = folder / f"{settings.source}-{payload['day']}-{cutoff.replace(':', '')}.html"
     env = Environment(loader=FileSystemLoader(ASSETS / "templates"), autoescape=select_autoescape(["html"]))
     template_helpers(env)
-    content = env.get_template("snapshot.html").render(
+    return env.get_template("snapshot.html").render(
         data=payload, snapshot=script_json(payload), nonce=secrets.token_urlsafe(24), cutoff=cutoff,
+        public_report=payload.get("public", False),
         static_report=snapshot_view(payload),
         css=(ASSETS / "static/snapshot.css").read_text() + (ASSETS / "static/mail_report.css").read_text(),
         javascript=(ASSETS / "static/snapshot.js").read_text(),
     )
+
+
+def export_snapshot(payload, settings):
+    folder = Path(settings.html_report_dir)
+    cutoff = payload.get("scheduled_time") or (settings.midday_time if payload["slot"] == "midday" else settings.schedule_time)
+    path = folder / f"{settings.source}-{payload['day']}-{cutoff.replace(':', '')}.html"
+    content = render_snapshot(payload, settings)
     atomic_write(path.resolve(), content)
     result = {"html": str(path.resolve())}
     if settings.export_png:
