@@ -106,19 +106,51 @@ def create_app(settings=None, database=None):
                  capital: float = 100000, weight: float = .1, max_positions: int = 10,
                  holding_days: int = 10, commission_bps: float = 3, min_commission: float = 5,
                  sell_tax_bps: float = 5, transfer_bps: float = .1, slippage_bps: float = 5,
-                 participation: float = .01, split_day: str = "", live: bool = False):
-        from .backtest import Simulation, simulate
+                 participation: float = .01, split_day: str = "", live: bool = False,
+                 profile: str = "default", start_day: str = "",
+                 risk_fraction: float | None = None, atr_risk_floor: float | None = None,
+                 max_entry_gap: float | None = None, require_valid_entry: bool | None = None,
+                 max_industry_weight: float | None = None, market_filter: bool | None = None,
+                 min_market_breadth: float | None = None, drawdown_pause: float | None = None):
+        from .backtest import simulate, simulation_profile
 
         try:
-            config = Simulation(capital, weight, max_positions, holding_days, commission_bps, min_commission,
-                                sell_tax_bps, transfer_bps, slippage_bps, participation, strategy,
-                                rule_version, cohort, split_day)
+            risk_options = {k: v for k, v in {"risk_fraction": risk_fraction, "atr_risk_floor": atr_risk_floor,
+                "max_entry_gap": max_entry_gap, "require_valid_entry": require_valid_entry,
+                "max_industry_weight": max_industry_weight, "market_filter": market_filter,
+                "min_market_breadth": min_market_breadth, "drawdown_pause": drawdown_pause}.items() if v is not None}
+            config = simulation_profile(profile, capital=capital, weight=weight, max_positions=max_positions,
+                holding_days=holding_days, commission_bps=commission_bps, min_commission=min_commission,
+                sell_tax_bps=sell_tax_bps, transfer_bps=transfer_bps, slippage_bps=slippage_bps,
+                participation=participation, strategy=strategy, rule_version=rule_version,
+                cohort=cohort, split_day=split_day, start_day=start_day, **risk_options)
             result = simulate(database, settings, day, config)
             if live:
                 from .portfolio import value_portfolio
 
                 result["valuation"] = value_portfolio(database, settings, result)
             return result
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from None
+
+    @app.get("/api/research/compare")
+    def research_compare(day: str | None = Query(default=None, pattern=r"^\d{8}$")):
+        from .validation import compare_profiles
+
+        try:
+            return compare_profiles(database, settings, day)
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from None
+
+    @app.get("/api/research/walk-forward")
+    def research_walk_forward(day: str | None = Query(default=None, pattern=r"^\d{8}$"),
+                              train_sessions: int = 126, test_sessions: int = 42,
+                              min_closed_trades: int = 30, max_folds: int = 12):
+        from .validation import WalkForward, walk_forward
+
+        try:
+            return walk_forward(database, settings, day,
+                WalkForward(train_sessions, test_sessions, min_closed_trades, max_folds))
         except ValueError as error:
             raise HTTPException(422, str(error)) from None
 

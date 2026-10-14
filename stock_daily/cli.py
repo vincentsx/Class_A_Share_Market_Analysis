@@ -55,6 +55,25 @@ def main():
     simulation.add_argument("--slippage-bps", type=float, default=5)
     simulation.add_argument("--participation", type=float, default=.01)
     simulation.add_argument("--split-day", default="")
+    simulation.add_argument("--start-day", default="", help="独立现金账户起始日期，排除更早信号")
+    simulation.add_argument("--profile", choices=("default", "baseline", "guarded", "adaptive"), default="default")
+    simulation.add_argument("--policy-start-day", help="策略前向生效日，研究回放通常留空")
+    simulation.add_argument("--risk-fraction", type=float, help="单笔风险占净值比例，0为关闭")
+    simulation.add_argument("--atr-risk-floor", type=float, help="风险距离至少为冻结ATR的倍数")
+    simulation.add_argument("--max-entry-gap", type=float, help="开盘相对昨收的追高上限，0为关闭")
+    simulation.add_argument("--require-valid-entry", action=argparse.BooleanOptionalAction, default=None)
+    simulation.add_argument("--max-industry-weight", type=float, help="行业市值占净值上限，0为关闭")
+    simulation.add_argument("--market-filter", action=argparse.BooleanOptionalAction, default=None)
+    simulation.add_argument("--min-market-breadth", type=float, help="站上MA20股票占比门槛（百分数）")
+    simulation.add_argument("--drawdown-pause", type=float, help="回撤达此比例后暂停本次模拟新增仓位")
+    research = commands.add_parser("validate-strategies", help="冻结研究记录：方案对照/成本压力/滚动验证，不改账户")
+    research.add_argument("--date", help="研究截止日期")
+    research.add_argument("--mode", choices=("compare", "walk-forward"), default="compare")
+    research.add_argument("--train-sessions", type=int, default=126)
+    research.add_argument("--test-sessions", type=int, default=42)
+    research.add_argument("--min-closed-trades", type=int, default=30)
+    research.add_argument("--max-folds", type=int, default=12)
+    research.add_argument("--output", help="JSON研究记录路径，默认在data/research中生成独立记录")
     summary = commands.add_parser("evidence-summary", help="手动生成并缓存带证据引用的AI摘要")
     summary.add_argument("--date")
     html = commands.add_parser("export-html", help="导出可双击打开的离线HTML报告")
@@ -223,12 +242,29 @@ def main():
             with db.lock(settings.source):
                 result = recover_archive(db, settings, args.date)
         elif args.command == "backtest":
-            from .backtest import Simulation, simulate
+            from .backtest import Simulation, simulate, simulation_profile
 
             if args.date:
                 parse_day(args.date)
-            config = Simulation(**{k: getattr(args, k) for k in Simulation.__dataclass_fields__})
+            config = simulation_profile(args.profile, **{k: getattr(args, k)
+                for k in Simulation.__dataclass_fields__ if getattr(args, k) is not None})
             result = simulate(db, settings, args.date, config)
+        elif args.command == "validate-strategies":
+            from pathlib import Path
+            from uuid import uuid4
+
+            from .html_export import atomic_write
+            from .validation import WalkForward, compare_profiles, walk_forward
+
+            if args.mode == "compare":
+                result = compare_profiles(db, settings, args.date)
+            else:
+                result = walk_forward(db, settings, args.date, WalkForward(args.train_sessions,
+                    args.test_sessions, args.min_closed_trades, args.max_folds))
+            destination = Path(args.output or f"data/research/{settings.source}-{args.mode}-"
+                               f"{now().strftime('%Y%m%d-%H%M%S')}-{uuid4().hex[:8]}.json").resolve()
+            result["record_path"] = str(destination)
+            atomic_write(destination, json.dumps(result, ensure_ascii=False, allow_nan=False, indent=2))
         elif args.command == "evidence-summary":
             from .evidence_ai import summarize_evidence
             from .service import dashboard

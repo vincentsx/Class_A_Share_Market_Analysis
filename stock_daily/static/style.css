@@ -13,3 +13,4 @@
 .funds-grid{grid-template-columns:repeat(4,minmax(0,1fr))}.funds-grid .metric-value{font-size:26px}.funds-grid .metric-value small{font-size:12px;letter-spacing:0}
 @media(max-width:1200px){.funds-grid{grid-template-columns:repeat(2,minmax(0,1fr))}}
 @media(max-width:560px){.funds-grid{grid-template-columns:1fr}.funds-grid .metric-value{font-size:28px}}
+.research-actions{display:flex;flex-wrap:wrap;gap:10px;margin:12px 0}#research-output{font-size:12px;overflow-wrap:anywhere}#research-output .notice{flex-wrap:wrap}#research-output details{margin:12px 0}

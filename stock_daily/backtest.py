@@ -6,13 +6,18 @@ the curve instead of fabricating a valuation. Settings are explicit assumptions.
 
 import math
 from collections import Counter, defaultdict
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from datetime import datetime
 
 from sqlalchemy import select
 
 from .config import SHANGHAI
 from .db import bars, reports, sessions, signals, trading_days
+from .execution import entry_guard, entry_size, industry_of, market_gate
+from .performance import performance
+
+DEFAULT_PROFILE = "guarded"
+DEFAULT_POLICY_START_DAY = "20261015"
 
 
 @dataclass(frozen=True)
@@ -31,10 +36,22 @@ class Simulation:
     rule_version: str = ""
     cohort: str = "all"
     split_day: str = ""
+    start_day: str = ""
+    risk_fraction: float = 0
+    atr_risk_floor: float = 0
+    max_entry_gap: float = 0
+    require_valid_entry: bool = False
+    max_industry_weight: float = 0
+    market_filter: bool = False
+    min_market_breadth: float = 40
+    drawdown_pause: float = 0
+    policy_start_day: str = ""
 
     def validate(self):
         values = [self.capital, self.weight, self.commission_bps, self.min_commission, self.sell_tax_bps,
-                  self.transfer_bps, self.slippage_bps, self.participation]
+                  self.transfer_bps, self.slippage_bps, self.participation, self.risk_fraction,
+                  self.atr_risk_floor, self.max_entry_gap, self.max_industry_weight,
+                  self.min_market_breadth, self.drawdown_pause]
         if not all(math.isfinite(v) for v in values):
             raise ValueError("模拟参数必须为有限数值")
         if not 1000 <= self.capital <= 1e9 or not 0 < self.weight <= 1 or not 1 <= self.max_positions <= 50:
@@ -47,6 +64,36 @@ class Simulation:
             raise ValueError("模拟策略或样本范围无效")
         if self.split_day:
             datetime.strptime(self.split_day, "%Y%m%d")
+        if self.start_day:
+            datetime.strptime(self.start_day, "%Y%m%d")
+        if self.policy_start_day:
+            datetime.strptime(self.policy_start_day, "%Y%m%d")
+        if not (0 <= self.risk_fraction <= .05 and 0 <= self.atr_risk_floor <= 10
+                and 0 <= self.max_entry_gap <= .2 and 0 <= self.max_industry_weight <= 1
+                and 0 <= self.min_market_breadth <= 100 and 0 <= self.drawdown_pause <= .5):
+            raise ValueError("风险、ATR、跳空、行业、市场广度或回撤参数无效")
+
+
+def simulation_profile(profile="default", **overrides):
+    """The deployed account switches forward; explicit research profiles replay."""
+    if profile == "default":
+        return replace(simulation_profile(DEFAULT_PROFILE), **{"policy_start_day": DEFAULT_POLICY_START_DAY, **overrides})
+    config = Simulation()
+    if profile == "guarded":
+        config = replace(config, risk_fraction=.005, atr_risk_floor=1, max_entry_gap=.03,
+                         require_valid_entry=True, max_industry_weight=.3, drawdown_pause=.1)
+    elif profile == "adaptive":
+        config = replace(simulation_profile("guarded"), market_filter=True)
+    elif profile != "baseline":
+        raise ValueError("模拟方案应为 default、baseline、guarded 或 adaptive")
+    return replace(config, **overrides)
+
+
+def effective_config(config, entry_day):
+    if config.policy_start_day and entry_day < config.policy_start_day:
+        return replace(config, risk_fraction=0, atr_risk_floor=0, max_entry_gap=0,
+                       require_valid_entry=False, max_industry_weight=0, market_filter=False, drawdown_pause=0)
+    return config
 
 
 def board(code):
@@ -72,10 +119,12 @@ def position_value(position, mark):
 
 
 def simulate(db, settings, as_of=None, config=None):
-    config = config or Simulation()
+    config = config or simulation_profile()
     config.validate()
     if as_of:
         datetime.strptime(as_of, "%Y%m%d")
+    if config.start_day and as_of and config.start_day > as_of:
+        raise ValueError("模拟起始日期不能晚于截止日期")
     saved_reports = db.rows(select(reports).where(reports.c.source == settings.source,
                                                    reports.c.day <= as_of if as_of else True)
                             .order_by(reports.c.day))
@@ -88,14 +137,17 @@ def simulate(db, settings, as_of=None, config=None):
                 "market_value": None, "available_cash": None, "equity": None, "profit": None,
                 "through": None}, "periods": [], "positions": []}
     latest = session_rows[-1]["day"]
+    if config.start_day and config.start_day > latest:
+        raise ValueError("模拟起始日期晚于已有行情截止日")
     saved = db.rows(select(signals).where(signals.c.source == settings.source, signals.c.day <= latest,
+                                         signals.c.day >= config.start_day if config.start_day else True,
                                          signals.c.strategy == config.strategy if config.strategy != "all" else True)
                     .order_by(signals.c.day, signals.c.code, signals.c.strategy))
     saved = [s for s in saved if (not config.rule_version or s["payload"].get("rule_version") == config.rule_version)
              and (config.cohort != "priority" or s["payload"].get("priority", True))]
     if len(saved) > 20000:
         raise ValueError("模拟信号超过20000条，请选择策略、版本或较早截止日期缩小范围")
-    earliest = min((s["day"] for s in saved), default=latest)
+    earliest = config.start_day or min((s["day"] for s in saved), default=latest)
     dates = [r["day"] for r in db.rows(select(trading_days.c.day).where(
         trading_days.c.source == settings.source, trading_days.c.day >= earliest,
         trading_days.c.day <= latest, trading_days.c.is_open == 1).order_by(trading_days.c.day))]
@@ -133,8 +185,10 @@ def simulate(db, settings, as_of=None, config=None):
     cash, peak, drawdown = config.capital, config.capital, 0
     positions, trades, curve = {}, [], []
     stop = None
+    paused = False
     benchmark_origin = session_map.get(dates[0], {}).get("benchmark", {}).get("close") if dates else None
     for index, day in enumerate(dates):
+        entry_config = effective_config(config, day)
         session = session_map.get(day)
         if session is None:
             stop = {"day": day, "reason": "交易日行情快照缺失，停止计算，未填补净值"}
@@ -156,6 +210,9 @@ def simulate(db, settings, as_of=None, config=None):
         if invalid:
             stop = {"day": day, "reason": invalid}
             break
+        # Pause decisions use the previous close, never today's closing equity.
+        if entry_config.drawdown_pause and curve and curve[-1]["equity"] / peak - 1 <= -entry_config.drawdown_pause:
+            paused = True
         for code in list(positions):
             position = positions[code]
             if index <= position["entry_index"] or not position["exit_due"]:
@@ -194,6 +251,7 @@ def simulate(db, settings, as_of=None, config=None):
                            "exit_trigger_day": position["exit_trigger_day"],
                            "exit_trigger_close": position["exit_trigger_close"],
                            "exit_delays": position["exit_delays"],
+                           "entry_risk": position["entry_risk"], "industry": position["industry"],
                            "net_return": ((gross - cost) / position["spent"] - 1) * 100,
                            "exit_reason": position["exit_due"]})
             del positions[code]
@@ -220,18 +278,25 @@ def simulate(db, settings, as_of=None, config=None):
             if row["open"] >= previous["close"] * (1 + limit - .001):
                 skipped["开盘接近涨停，保守不成交"] += 1
                 continue
+            reason = ("组合回撤达到阈值，暂停新增仓位" if paused else
+                      market_gate(report_map.get(signal["day"]), entry_config))
+            reason = reason or entry_guard(entry_config, row["open"], previous, payload)
+            if reason:
+                skipped[reason] += 1
+                continue
             price = row["open"] * (1 + config.slippage_bps / 10000)
             if price > row["high"]:
                 skipped["入场滑点价格超出日内范围"] += 1
                 continue
             # Use previously known volume and valuation; today's full volume is future information at open.
             equity = cash + sum(p["shares"] * p["mark"] for p in positions.values())
-            budget = min(cash, equity * config.weight)
-            shares = math.floor(min(budget / price, previous["volume"] * config.participation) / lot) * lot
-            while shares >= lot and shares * price + fees(shares * price, config) > budget:
-                shares -= lot
-            if shares < lot:
-                skipped["资金或流动性不足最小申报数量"] += 1
+            industry = industry_of(payload)
+            industry_value = sum(p["shares"] * p["mark"] for p in positions.values() if p["industry"] == industry)
+            sizing = entry_size(entry_config, cash=cash, equity=equity, price=price, previous=previous,
+                                payload=payload, lot=lot, industry_value=industry_value)
+            shares = sizing["shares"]
+            if sizing["reason"]:
+                skipped[sizing["reason"]] += 1
                 continue
             gross = shares * price
             cost = fees(gross, config)
@@ -242,6 +307,7 @@ def simulate(db, settings, as_of=None, config=None):
                                "label": payload.get("label", signal["strategy"]),
                                "rule_version": payload.get("rule_version", ""),
                                "entry_reasons": payload.get("reasons", []),
+                               "entry_risk": sizing, "industry": industry,
                                "invalidation_price": payload["invalidation_adj"] / row["adj"],
                                "exit_trigger_day": None, "exit_trigger_close": None, "exit_delays": [],
                                "signal_day": signal["day"], "name": payload["name"], "strategy": signal["strategy"],
@@ -277,7 +343,15 @@ def simulate(db, settings, as_of=None, config=None):
                     (p["equity"] for p in reversed(curve) if p["day"] < config.split_day), config.capital)
                 periods.append({"label": label, "from": points[0]["day"], "to": points[-1]["day"],
                                 "return": (points[-1]["equity"] / start_equity - 1) * 100})
+    valued_positions = [{**p, **position_value(p, p["mark"])} for p in positions.values()]
+    metrics = performance(curve, trades, valued_positions, config.capital)
+    pause_limit = effective_config(config, curve[-1]["day"]).drawdown_pause if curve else 0
     return {"status": "incomplete" if stop else "success", "as_of": latest, "stop": stop,
+            "execution_version": "cash-v2", "execution_state": {"entry_paused": paused or bool(
+                pause_limit and curve and curve[-1]["equity"] / peak - 1 <= -pause_limit)},
+            "policy": {"effective_from": config.policy_start_day or None,
+                       "mode": "prospective" if config.policy_start_day else "replay"},
+            "performance": metrics,
             "parameters": asdict(config), "curve": curve, "trades": trades, "skipped": dict(skipped),
             "positions": [{"code": c, **p, **position_value(p, p["mark"])} for c, p in positions.items()],
             "periods": periods,
@@ -297,6 +371,9 @@ def simulate(db, settings, as_of=None, config=None):
                       "买卖时间仅表示交易日期和开盘模拟时段，不是实际成交时间；模拟价格为开盘价加减滑点。"
                       "失效按收盘价判断，不是盘中触价立即止损。已卖出盈亏扣除双边费用，未卖出浮盈亏仅扣买入费用。"
                       "按现金、最小申报数量、费用、滑点和前一日量能限制模拟；开盘接近涨跌停保守不成交。"
+                      "可选风险仓位按冻结失效位置/ATR及预计双边费用测算，不保证实际亏损上限；"
+                      "开盘保护、行业限额及市场状态仅限制新增仓位。回撤暂停使用前一收盘，"
+                      "触发后本次模拟不再新增仓位，既有持仓按原退出规则处理。"
                       "缺失持仓行情或分红送转细节时停止净值。日线不能证明真实成交；费用是可修改假设。"
                       "历史名称/行业/风险状态与数据修订不完全具备时点性，仍有历史偏差；事后生成的信号排除。"
                       "前后段对比不是预先留出的样本外检验，不自动调参、不证明交易优势。"}

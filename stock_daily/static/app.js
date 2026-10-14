@@ -48,6 +48,7 @@ async function load(day = selectedDay) {
   try {
     const data = await api(`/api/dashboard${day ? `?day=${encodeURIComponent(day)}` : ""}`);
     if (id !== refreshId) return;
+    if (state?.report?.day !== data.report?.day) $("research-output").textContent = "日期已更新，请重新运行研究。";
     state = data;
     renderOperations(data.health);
     const emailStatus = $("email-status");
@@ -237,6 +238,7 @@ function tradeCard(t) {
     ${closed ? `<p>卖出开盘价 ${num(t.exit_open,4)} 元 → 模拟卖出价 ${num(t.exit_price,4)} 元；卖出费用 ${num(t.exit_fee)} 元；卖出净收入 ${num(t.proceeds)} 元。</p>` : ""}
     ${t.exit_trigger_day ? `<p>退出触发日 ${dateLabel(t.exit_trigger_day)} · 当日收盘 ${num(t.exit_trigger_close,4)} 元；该价是判断依据，不是保证成交价。</p>` : ""}
     <p>原信号失效价 ${num(t.invalidation_price,4)} 元；买卖时间只表示交易日期和开盘模型时段，没有实际成交分钟记录。</p>
+    ${t.entry_risk?.risk_budget ? `<p>入场风险预算 ${num(t.entry_risk.risk_budget)} 元 · 预计风险 ${num(t.entry_risk.estimated_risk)} 元（含预计双边费用） · 风险距离 ${num(t.entry_risk.risk_distance,4)} 元。跳空或退出延期可能超过预算。</p>` : ""}
     ${delays.length ? `<ul>${delays.map((d) => `<li>${dateLabel(d.day)}：${esc(d.reason)}</li>`).join("")}</ul>` : ""}</details></article>`;
 }
 function renderTradeLedger() {
@@ -309,6 +311,17 @@ function renderBacktest(data) {
     ["profit","盈亏金额",profit,"总资产减初始资金，已计入发生的费用"],
   ].map(([field,label,value,note]) => `<div class="tracking-card" data-account-field="${field}"><h3>${label}</h3><div class="metric-value ${field === "profit" ? color(value) : ""}">${field === "profit" && value > 0 ? "+" : ""}${num(value)}<small> 元</small></div><p>${esc(note)}</p></div>`).join("")}</div><p class="muted">总资产 ${num(equity)} 元 = 持仓市值 + 可用资金 · 账户估值截至 ${dateLabel(s.through || last?.day)}</p>`;
   const parameterText = `资金 ${num(p.capital,0)}元 · 单只权重 ${num(p.weight * 100,0)}% · 最多${p.max_positions}只 · 持有${p.holding_days}交易日 · 每边佣金${num(p.commission_bps,1)}基点（最低${num(p.min_commission)}元） · 卖出税费${num(p.sell_tax_bps,1)}基点 · 每边过户费${num(p.transfer_bps,1)}基点 · 每边滑点${num(p.slippage_bps,1)}基点 · 前一日量能参与上限${num(p.participation * 100,1)}%`;
+  const riskText = `单笔风险预算 ${p.risk_fraction ? num(p.risk_fraction * 100,2) + "%（估算）" : "关闭"} · ATR风险距离下限 ${num(p.atr_risk_floor ?? 0,1)}倍 · 开盘追高上限 ${p.max_entry_gap ? pct(p.max_entry_gap * 100) : "关闭"} · 失效入场保护 ${p.require_valid_entry ? "开启" : "关闭"} · 行业上限 ${p.max_industry_weight ? pct(p.max_industry_weight * 100) : "关闭"} · 市场过滤 ${p.market_filter ? "开启" : "关闭"} · 回撤暂停 ${p.drawdown_pause ? pct(p.drawdown_pause * 100) : "关闭"}`;
+  const metrics = data.performance;
+  const policyNotice = data.policy?.effective_from ? `<div class="notice"><span>默认账户从 ${dateLabel(data.policy.effective_from)} 开盘起采用风险保护规则；此前成交和既有持仓沿用原记录，现有持仓继续按原退出规则管理。</span></div>` : "";
+  const performanceCards = metrics ? `<div class="tracking-grid">${[
+    ["日线夏普",num(metrics.sharpe),"无风险利率假设为0；至少30个日收益"],
+    ["已平仓胜率",pct(metrics.win_rate),`盈亏比 ${num(metrics.payoff_ratio)} · 盈利因子 ${num(metrics.profit_factor)}`],
+    ["最长未恢复净值高点",`${metrics.longest_underwater_sessions}交易日`,`目前连续 ${metrics.current_underwater_sessions}交易日`],
+    ["年化净收益",pct(metrics.annual_return),"至少252个日收益；短样本留空"],
+    ["累计双边换手",num(metrics.turnover) + "倍","成交额 / 平均净值，未年化"],
+    ["模拟滑点成本",num(metrics.slippage_cost) + "元","已反映在成交价与盈亏中，不重复扣除"],
+  ].map(([label,value,note]) => `<div class="tracking-card"><h3>${label}</h3><div class="metric-value">${value}</div><p>${esc(note)}</p></div>`).join("")}</div><p class="muted">${metrics.small_sample ? "样本不足，尚不能判定策略优势。 " : ""}绩效按日线账户统计，盘中估值不改变这些指标。</p>` : "";
   tradeRows = [...(data.trades || []).map((t) => ({...t,status:"closed"})), ...positions.map((t) => ({...t,status:"open"}))]
     .sort((a,b) => (a.status === b.status ? String(b.exit_day || b.entry_day).localeCompare(String(a.exit_day || a.entry_day)) || a.code.localeCompare(b.code) : a.status === "open" ? -1 : 1));
   tradeCutoff = s.through || data.summary.through;
@@ -322,10 +335,10 @@ function renderBacktest(data) {
     const points = (key) => curve.map((r,i) => `${num(20 + i/(curve.length-1)*560)},${num(140 - ((r[key] ?? 0)-low)/span*110)}`).join(" ");
     chart = `<svg class="price-chart" viewBox="0 0 600 165" role="img" aria-label="模拟组合与沪深300累计变化"><polyline class="chart-line" points="${points("return")}"/><polyline fill="none" stroke="#b18c54" stroke-width="2" points="${points("benchmark_return")}"/></svg><p class="muted">绿色：模拟组合 · 棕色：沪深300 · ${dateLabel(curve[0].day)} → ${dateLabel(curve[curve.length-1].day)}${live ? " · 最后一点为所标时点的盘中估值" : ""}</p>`;
   }
-  $("backtest-output").innerHTML = `${syncNotice}${valuationNotice}${data.stop ? `<div class="notice error">${esc(data.stop.reason)} · ${dateLabel(data.stop.day)}；净值仅计算至 ${dateLabel(data.summary.through)}</div>` : ""}${accountCards}
+  $("backtest-output").innerHTML = `${syncNotice}${valuationNotice}${policyNotice}${data.stop ? `<div class="notice error">${esc(data.stop.reason)} · ${dateLabel(data.stop.day)}；净值仅计算至 ${dateLabel(data.summary.through)}</div>` : ""}${accountCards}
     <p class="muted">已实现盈亏 ${num(s.realized_profit)} 元 · 持仓浮盈亏 ${num(s.unrealized_profit)} 元；两者合计为账户盈亏，浮盈亏仅扣已发生买入费用。</p>${ledger}
     <div class="tracking-grid"><div class="tracking-card"><h3>模拟组合累计变化</h3><div class="metric-value">${pct(s.return)}</div><p>沪深300同期 ${pct(s.benchmark_return)}</p></div><div class="tracking-card"><h3>日线组合最大回撤</h3><div class="metric-value">${pct(s.max_drawdown)}</div><p>已卖出 ${s.closed_trades || 0} / 未平仓 ${s.open_positions || 0}</p></div><div class="tracking-card"><h3>累计模拟费用</h3><div class="metric-value">${num(s.fees)} 元</div><p>未平仓费用只含已发生的入场费用</p></div></div>${chart}
-    <details class="panel research-panel"><summary>模拟规则与参数</summary><div class="research-body"><p>${esc(data.method)}</p><p>${esc(parameterText)}${OFFLINE ? " · 离线快照固定参数，需在本地服务中修改" : ""}</p></div></details>
+    ${performanceCards}<details class="panel research-panel"><summary>模拟规则与参数</summary><div class="research-body"><p>${esc(data.method)}</p><p>${esc(parameterText)}${OFFLINE ? " · 离线快照固定参数，需在本地服务中修改" : ""}</p><p>${esc(riskText)}</p></div></details>
     <details class="panel research-panel"><summary>未成交与退出延期原因</summary><div class="research-body research-grid">${Object.entries(data.skipped || {}).map(([reason,count]) => `<div class="research-card">${esc(reason)}：${count}</div>`).join("") || "暂无跳过记录"}</div></details>
     ${(data.periods || []).map((p) => `<p>${esc(p.label)} ${dateLabel(p.from)} → ${dateLabel(p.to)}：${pct(p.return)}</p>`).join("")}`;
   $("trade-status").value = tradeStatus;
@@ -348,6 +361,40 @@ $("tracking-cohort").addEventListener("change",renderScorecard);
 $("tracking-horizon").addEventListener("change",renderScorecard);
 $("backtest-form").addEventListener("submit",(e) => {e.preventDefault();loadBacktest();});
 if (OFFLINE) $("backtest-form").querySelectorAll("input,select,button").forEach((input) => input.disabled = true);
+const profileLabel = (p) => ({baseline:"原版基线",guarded:"风险保护版",adaptive:"市场过滤版"}[p] || p);
+let researchId = 0;
+async function loadResearch(kind) {
+  const id = ++researchId, day = state?.report?.day;
+  if (!day || OFFLINE) return;
+  const buttons = [$("research-compare"),$("research-walk")];
+  buttons.forEach((b) => b.disabled = true);
+  $("research-output").textContent = "正在核验全部方案与样本，请稍候…";
+  try {
+    const data = await api(`/api/research/${kind}?day=${encodeURIComponent(day)}`);
+    if (id !== researchId || day !== state?.report?.day) return;
+    const status = {insufficient:"样本不足",incomplete:"数据不完整",evaluated:"研究评估已完成"}[data.status] || data.status;
+    const rows = (items) => items.map((r) => `<tr><td>${esc(r.label || profileLabel(r.profile))}</td><td>${pct(r.summary?.return)}</td><td>${pct(r.summary?.max_drawdown)}</td><td>${r.summary?.closed_trades ?? 0}</td><td>${num(r.performance?.sharpe)}</td><td>${esc(r.status === "incomplete" ? "数据不完整" : r.performance?.small_sample ? "样本不足" : "研究结果")}</td></tr>`).join("");
+    const table = (items) => `<div class="table-wrap"><table><thead><tr><th>方案 / 实验</th><th>扣费累计变化</th><th>最大回撤</th><th>平仓笔数</th><th>夏普</th><th>样本状态</th></tr></thead><tbody>${rows(items)}</tbody></table></div>`;
+    $("research-output").innerHTML = `<div class="notice${data.status === "evaluated" ? "" : " error"}"><b>${esc(status)}</b><span>${esc(data.message)} 已有${data.session_count || 0}交易日${data.required_sessions ? `，首个完整窗口需要${data.required_sessions}交易日` : ""}。</span></div>
+      <p class="muted">数据截至 ${dateLabel(data.as_of)} · 本次研究使用固定默认参数，与上方自定义模拟参数独立。</p>
+      ${data.profiles ? table(data.profiles) + data.profiles.map((p) => `<details class="panel research-panel"><summary>${esc(profileLabel(p.profile))}：成本压力与持有期敏感性</summary>${table(p.stress_tests)}</details>`).join("") : ""}
+      ${(data.folds || []).map((f) => `<details class="panel research-panel"><summary>测试 ${dateLabel(f.test_start)} → ${dateLabel(f.test_end)} · ${f.selected_profile ? esc(profileLabel(f.selected_profile)) : "训练样本不足，未选方案"}</summary><div class="research-body"><p>训练 ${dateLabel(f.train_start)} → ${dateLabel(f.train_end)}；隔离${f.purge_sessions}交易日。</p>${table(f.training_trials)}${f.test_results.length ? table(f.test_results) : "未使用不足的训练样本评选方案。"}</div></details>`).join("")}
+      <p class="muted">${(data.limitations || []).map(esc).join(" ")}</p>`;
+    const download = document.createElement("button");
+    download.type = "button"; download.className = "button secondary"; download.textContent = "下载本次研究记录 JSON";
+    download.addEventListener("click", () => {
+      const url = URL.createObjectURL(new Blob([JSON.stringify(data,null,2)],{type:"application/json"}));
+      const link = document.createElement("a"); link.href = url; link.download = `策略研究-${kind}-${day}.json`;
+      link.click(); setTimeout(() => URL.revokeObjectURL(url),1000);
+    });
+    $("research-output").append(download);
+  } catch (error) {
+    if (id === researchId && day === state?.report?.day) $("research-output").textContent = error.message;
+  } finally { if (id === researchId) buttons.forEach((b) => b.disabled = !!OFFLINE); }
+}
+$("research-compare").addEventListener("click", () => loadResearch("compare"));
+$("research-walk").addEventListener("click", () => loadResearch("walk-forward"));
+if (OFFLINE) [$("research-compare"),$("research-walk")].forEach((b) => b.disabled = true);
 $("plan-form")?.addEventListener("submit",async (e) => {
   e.preventDefault(); const form = e.target, fields = new FormData(form), button = form.querySelector("button");button.disabled = true;
   const payload = {reason:fields.get("reason"),question:fields.get("question"),target:fields.get("target") ? Number(fields.get("target")) : null,invalidation:fields.get("invalidation") ? Number(fields.get("invalidation")) : null,checks:fields.getAll("checks")};
