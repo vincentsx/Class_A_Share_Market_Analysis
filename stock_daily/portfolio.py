@@ -5,6 +5,7 @@ from datetime import datetime, timedelta
 
 from sqlalchemy import select
 
+from .backtest import position_value
 from .config import SHANGHAI, now
 from .db import bars, sessions, signals, trading_days
 from .operations import state
@@ -130,7 +131,8 @@ def value_portfolio(db, settings, simulation, current=None):
         if not math.isclose(quote["previous"], prior[0]["close"], abs_tol=.0051, rel_tol=0):
             result["message"] = f"持仓{code}昨收与已核验日线不一致，需核验除权或数据修订。"
             return result
-        positions.append({**position, "mark": quote["price"], "quote_time": quote["quote_time"]})
+        positions.append({**position, "mark": quote["price"], "quote_time": quote["quote_time"],
+                          **position_value(position, quote["price"])})
         timestamps.append(quote["quote_time"])
     benchmark = quotes.get("000300.SH")
     if not benchmark:
@@ -159,6 +161,7 @@ def value_portfolio(db, settings, simulation, current=None):
                   quote_start=min(timestamps), quote_end=max(timestamps), positions=positions,
                   summary={**summary, "market_value": market_value, "equity": equity,
                            "profit": equity - summary["initial_capital"],
+                           "unrealized_profit": sum(p["profit"] for p in positions),
                            "return": (equity / summary["initial_capital"] - 1) * 100,
                            "benchmark_return": benchmark_return, "through": day},
                   message=("行情已过期，显示最后保存的盘中估值。" if stale else "")

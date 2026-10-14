@@ -348,6 +348,58 @@ def test_simulation_price_limits_block_entry_and_delay_exit(settings, db):
     assert result["skipped"]["开盘接近涨停，保守不成交"] == 1
 
 
+def test_trade_ledger_keeps_prices_costs_trigger_and_delayed_execution(settings, db):
+    simulation_fixture(db)
+    with db.engine.begin() as connection:
+        connection.execute(update(bars).where(bars.c.day == "20261007").values(open=9, low=8.8))
+    config = Simulation(holding_days=1)
+    pending = simulate(db, settings, "20261007", config)["positions"][0]
+    assert pending["entry_day"] == "20261006"
+    assert pending["entry_price"] == pytest.approx(10.1 * 1.0005)
+    assert pending["exit_trigger_day"] == "20261006"
+    assert pending["exit_trigger_close"] == pytest.approx(10.2)
+    assert pending["exit_delays"] == [{"day": "20261007", "reason": "停牌、缺少昨收或开盘接近跌停"}]
+    assert "exit_price" not in pending
+    result = simulate(db, settings, config=config)
+    trade = result["trades"][0]
+    assert trade["exit_day"] == "20261008" and trade["held_sessions"] == 2
+    assert trade["exit_price"] == pytest.approx(10.3 * .9995)
+    assert trade["exit_open"] == 10.3 and trade["entry_open"] == 10.1
+    assert trade["exit_delays"] == pending["exit_delays"]
+    assert trade["profit"] == pytest.approx(trade["proceeds"] - trade["spent"])
+    assert trade["profit"] == pytest.approx(trade["shares"] * (trade["exit_price"] - trade["entry_price"]) - trade["fees"])
+    assert trade["fees"] == pytest.approx(trade["entry_fee"] + trade["exit_fee"])
+    assert trade["published_at"] == "2026-10-05T20:30:00+08:00"
+    assert result["summary"]["profit"] == pytest.approx(result["summary"]["realized_profit"] + result["summary"]["unrealized_profit"])
+
+
+def test_close_invalidation_does_not_create_same_day_sale(settings, db):
+    simulation_fixture(db)
+    with db.engine.begin() as connection:
+        connection.execute(update(signals).values(payload={"name": "观察公司", "invalidation_adj": 10.15,
+            "published_at": "2026-10-05T20:30:00+08:00", "reasons": ["原始突破依据"], "rule_version": "v1"}))
+        connection.execute(update(bars).where(bars.c.day == "20261007").values(close=9.5, low=9.4))
+    pending = simulate(db, settings, "20261007")["positions"][0]
+    assert pending["exit_trigger_day"] == "20261007"
+    assert pending["exit_trigger_close"] == 9.5
+    assert pending["entry_reasons"] == ["原始突破依据"]
+    assert pending["invalidation_price"] == 10.15
+    assert "exit_price" not in pending
+    trade = simulate(db, settings)["trades"][0]
+    assert trade["exit_day"] == "20261008"
+    assert trade["exit_trigger_day"] == "20261007"
+
+
+def test_signal_timestamp_requires_explicit_timezone(settings, db):
+    simulation_fixture(db)
+    with db.engine.begin() as connection:
+        connection.execute(update(signals).values(payload={"name": "观察公司", "invalidation_adj": 1,
+                                                          "published_at": "2026-10-05T20:30:00"}))
+    result = simulate(db, settings)
+    assert result["skipped"]["事后生成或发布时间缺失"] == 2
+    assert not result["positions"] and not result["trades"]
+
+
 def test_public_payload_omits_personal_plans_and_runtime_metadata(populated):
     db, settings, _ = populated
     db.save_watch("600000.SH", "私人备注")
@@ -469,6 +521,77 @@ def test_offline_browser_all_candidates_and_new_views(populated, tmp_path):
             assert page.locator("#backtest-form button").is_disabled()
             assert not page.evaluate("document.documentElement.scrollWidth > innerWidth")
             assert not errors
+        browser.close()
+
+
+def test_trade_cards_filters_csv_and_scriptless_report(populated, tmp_path):
+    import csv
+
+    from stock_daily.html_export import render_daily
+
+    api = pytest.importorskip("playwright.sync_api")
+    db, settings, _ = populated
+    payload = daily_payload(db, settings)
+    simulation_fixture(db)
+    with db.engine.begin() as connection:
+        db.upsert(connection, signals, {"source": "demo", "day": "20261008", "code": "600000.SH",
+            "strategy": "breakout", "payload": {"name": "=观察公司", "label": "放量突破", "rule_version": "v1",
+            "invalidation_adj": 1, "reasons": ["原始突破依据"], "published_at": "2026-10-08T20:30:00+08:00"}})
+    payload["backtest"] = simulate(db, settings, config=Simulation(holding_days=1))
+    path = tmp_path / "trades.html"
+    path.write_text(render_daily(payload, settings))
+    with api.sync_playwright() as playwright:
+        if not Path(playwright.chromium.executable_path).is_file():
+            pytest.skip("Chromium未安装")
+        browser = playwright.chromium.launch()
+        with browser.new_context(viewport={"width": 390, "height": 844}) as context:
+            page = context.new_page()
+            errors = []
+            page.on("pageerror", lambda error: errors.append(str(error)))
+            page.goto(path.as_uri())
+            page.wait_for_function("window.REPORT_READY === true")
+            page.locator('[data-view="backtest"]').click()
+            page.locator(".trade-card").first.wait_for()
+            assert page.locator(".trade-card").count() == 3
+            card = page.locator('.trade-card[data-status="open"]')
+            assert "2026.10.09" in card.inner_text()
+            assert "10.4052 元" in card.inner_text()
+            assert "未卖出" in card.inner_text()
+            assert "持仓浮盈亏" in card.inner_text()
+            card.locator("summary").click()
+            assert "原始突破依据" in card.inner_text()
+            page.evaluate("loadBacktest()")
+            assert card.locator("details").get_attribute("open") is not None
+            page.locator("#trade-status").select_option("closed")
+            assert page.locator(".trade-card").count() == 2
+            assert "2026.10.07" in page.locator(".trade-card").first.inner_text()
+            assert "已实现盈亏" in page.locator(".trade-card").first.inner_text()
+            page.locator("#trade-status").select_option("open")
+            page.locator("#trade-search").fill("不存在")
+            assert page.locator(".trade-card").count() == 0
+            assert page.locator("#export-trades").is_disabled()
+            page.locator("#trade-search").fill("600000")
+            with page.expect_download() as download:
+                page.locator("#export-trades").click()
+            destination = tmp_path / "trades.csv"
+            download.value.save_as(destination)
+            with destination.open(encoding="utf-8-sig", newline="") as file:
+                rows = list(csv.DictReader(file))
+            assert len(rows) == 1
+            assert rows[0]["名称"] == "'=观察公司"
+            assert rows[0]["买入日期"] == "20261009"
+            assert rows[0]["模拟卖出价"] == "" and rows[0]["卖出日期"] == ""
+            assert float(rows[0]["模拟买入价"]) == pytest.approx(10.4 * 1.0005)
+            assert not page.evaluate("document.documentElement.scrollWidth > innerWidth")
+            page.set_viewport_size({"width": 1440, "height": 1000})
+            assert not page.evaluate("document.documentElement.scrollWidth > innerWidth")
+            assert not errors
+        with browser.new_context(java_script_enabled=False) as context:
+            page = context.new_page()
+            page.goto(path.as_uri())
+            text = page.locator("#static-report").inner_text()
+            for label in ("买入时间", "买入价格", "卖出时间", "卖出价格", "已实现盈亏", "持仓浮盈亏"):
+                assert label in text
         browser.close()
 
 

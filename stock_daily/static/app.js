@@ -177,6 +177,63 @@ function renderScorecard() {
   }).join("") || emptyRow("当前范围没有已存信号",7);
 }
 let backtestId = 0;
+let tradeRows = [], tradeSearch = "", tradeStatus = "all", tradeCutoff = "", tradeHoldingDays = 10;
+const tradeEvidenceOpen = new Set();
+function rememberTradeEvidence() {
+  document.querySelectorAll(".trade-evidence").forEach((element) => {
+    if (element.open) tradeEvidenceOpen.add(element.dataset.tradeKey);
+    else tradeEvidenceOpen.delete(element.dataset.tradeKey);
+  });
+}
+function matchingTrades() {
+  const query = tradeSearch.trim().toLowerCase();
+  return tradeRows.filter((t) => (tradeStatus === "all" || t.status === tradeStatus) &&
+    [t.name,t.code,t.label,t.strategy,t.rule_version].join(" ").toLowerCase().includes(query));
+}
+function tradeCard(t) {
+  const closed = t.status === "closed", delays = t.exit_delays || [];
+  const key = `${t.code}|${t.entry_day}|${t.strategy}`;
+  const profit = t.profit ?? (closed ? t.shares * (t.exit_price - t.entry_price) - t.fees : t.shares * t.mark - t.spent);
+  const status = closed ? "已卖出" : t.exit_due ? "待退出" : "持仓中";
+  const reason = t.exit_reason || t.exit_due;
+  return `<article class="trade-card" data-code="${esc(t.code)}" data-status="${esc(t.status)}">
+    <header><div><h3>${esc(t.name)} <small>${esc(t.code)}</small></h3><p>${esc(t.label || t.strategy)} · ${esc(t.rule_version || "版本未记录")}</p></div><span class="chip${!closed && t.exit_due ? " amber" : ""}">${status}</span></header>
+    <dl class="trade-prices"><div><dt>买入时间</dt><dd>${dateLabel(t.entry_day)}<small>开盘模拟</small></dd></div><div><dt>买入价格</dt><dd>${num(t.entry_price,4)} 元<small>已计买入滑点</small></dd></div>
+    <div><dt>卖出时间</dt><dd>${closed ? dateLabel(t.exit_day) : "未卖出"}<small>${closed ? "开盘模拟" : "尚未确认模拟卖出"}</small></dd></div><div><dt>卖出价格</dt><dd>${closed ? `${num(t.exit_price,4)} 元` : "—"}<small>${closed ? "已计卖出滑点" : "不以估值代替卖出价"}</small></dd></div></dl>
+    ${closed ? "" : `<p class="trade-mark">最近估值 <b>${num(t.mark,4)} 元</b> · ${t.quote_time ? timeLabel(t.quote_time) + "（北京时间）" : dateLabel(tradeCutoff) + " 日线"}</p>`}
+    <div class="trade-result"><span>${closed ? "已实现盈亏" : "持仓浮盈亏"}<b class="${color(profit)}">${profit > 0 ? "+" : ""}${num(profit)} 元</b></span><span>扣费变化<b class="${color(t.net_return)}">${pct(t.net_return)}</b></span></div>
+    <p class="muted">${num(t.shares,0)} 股 · ${t.held_sessions ?? "—"} 个已核验持有交易日 · ${closed ? "双边费用" : "已发生买入费用"} ${num(closed ? t.fees : t.entry_fee)} 元${closed ? "" : "，浮盈亏未扣未来卖出费用"}</p>
+    <p class="trade-plan">${reason ? `${closed ? "退出原因" : "待退出原因"}：${esc(reason)}${t.exit_trigger_day ? `；${dateLabel(t.exit_trigger_day)} 收盘触发` : ""}` : `退出观察：收盘跌破 ${num(t.invalidation_price,4)} 元，或持有期满 ${tradeHoldingDays} 个交易日；之后下一可模拟开盘退出。`}</p>
+    ${delays.length ? `<p class="negative">退出受限，已延期 ${delays.length} 个交易日；${closed ? "下方保留延期记录。" : "仍未模拟卖出。"}</p>` : ""}
+    <details class="trade-evidence" data-trade-key="${esc(key)}"${tradeEvidenceOpen.has(key) ? " open" : ""}><summary>查看信号依据与成交计算</summary><p>信号日 ${dateLabel(t.signal_day)} · 发布 ${timeLabel(t.published_at)}（北京时间）</p>
+    ${t.entry_reasons?.length ? `<ul>${t.entry_reasons.map((r) => `<li>${esc(r)}</li>`).join("")}</ul>` : "<p>原信号未保存具体买入依据，请核对该日原始报告。</p>"}
+    <p>买入开盘价 ${num(t.entry_open,4)} 元 → 模拟买入价 ${num(t.entry_price,4)} 元；买入费用 ${num(t.entry_fee)} 元；买入支出 ${num(t.spent)} 元。</p>
+    ${closed ? `<p>卖出开盘价 ${num(t.exit_open,4)} 元 → 模拟卖出价 ${num(t.exit_price,4)} 元；卖出费用 ${num(t.exit_fee)} 元；卖出净收入 ${num(t.proceeds)} 元。</p>` : ""}
+    ${t.exit_trigger_day ? `<p>退出触发日 ${dateLabel(t.exit_trigger_day)} · 当日收盘 ${num(t.exit_trigger_close,4)} 元；该价是判断依据，不是保证成交价。</p>` : ""}
+    <p>原信号失效价 ${num(t.invalidation_price,4)} 元；买卖时间只表示交易日期和开盘模型时段，没有实际成交分钟记录。</p>
+    ${delays.length ? `<ul>${delays.map((d) => `<li>${dateLabel(d.day)}：${esc(d.reason)}</li>`).join("")}</ul>` : ""}</details></article>`;
+}
+function renderTradeLedger() {
+  rememberTradeEvidence();
+  const rows = matchingTrades();
+  $("trade-count").textContent = `显示 ${rows.length} / ${tradeRows.length} 笔 · 持仓 ${tradeRows.filter((t) => t.status === "open").length} · 已卖出 ${tradeRows.filter((t) => t.status === "closed").length}`;
+  $("trade-ledger").innerHTML = rows.map(tradeCard).join("") || '<p class="muted">暂无符合条件的模拟交易。最新信号需等下一交易日完整日线核验；未成交原因见下方。</p>';
+  $("export-trades").disabled = !rows.length;
+}
+function exportTradeLedger() {
+  const rows = matchingTrades();
+  // Escape formula-like cells as text for spreadsheets, including untrusted names/reasons.
+  const cell = (value) => {
+    const text = typeof value === "number" ? String(value) : String(value ?? "").replace(/^([\s]*[=+@-])/, "'$1");
+    return `"${text.replaceAll('"','""')}"`;
+  };
+  const header = ["股票代码","名称","状态","策略","版本","信号日期","发布时间（北京时间）","买入日期","买入时段","买入开盘价","模拟买入价","卖出日期","卖出时段","卖出开盘价","模拟卖出价","股数","买入费用","卖出费用","已发生费用","买入支出","卖出净收入","最近估值价","估值时间","盈亏金额","扣费变化(%)","已核验持有交易日","失效价","退出触发日期","触发收盘价","退出原因","退出延期记录","买入依据"];
+  const values = rows.map((t) => [t.code,t.name,t.status === "closed" ? "已卖出" : t.exit_due ? "待退出" : "持仓中",t.label || t.strategy,t.rule_version,t.signal_day,t.published_at,t.entry_day,"开盘模拟",t.entry_open,t.entry_price,t.exit_day,t.exit_day ? "开盘模拟" : "",t.exit_open,t.exit_price,t.shares,t.entry_fee,t.exit_fee,t.status === "closed" ? t.fees : t.entry_fee,t.spent,t.proceeds,t.status === "open" ? t.mark : null,t.status === "open" ? t.quote_time || tradeCutoff : null,t.profit,t.net_return,t.held_sessions,t.invalidation_price,t.exit_trigger_day,t.exit_trigger_close,t.exit_reason || t.exit_due,(t.exit_delays || []).map((d) => `${d.day} ${d.reason}`).join("；"),(t.entry_reasons || []).join("；")]);
+  const blob = new Blob(["\ufeff" + [header,...values].map((row) => row.map(cell).join(",")).join("\r\n")], {type:"text/csv;charset=utf-8"});
+  const url = URL.createObjectURL(blob), link = document.createElement("a");
+  link.href = url; link.download = `模拟交易明细-${tradeCutoff || "最新"}.csv`;
+  link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
 async function loadBacktest() {
   const id = ++backtestId, day = state?.report?.day;
   if (!day) return;
@@ -194,6 +251,7 @@ async function loadBacktest() {
   finally { if (id === backtestId) button.disabled = !!OFFLINE; }
 }
 function renderBacktest(data) {
+  rememberTradeEvidence();
   const valuation = data.valuation ? {...data.valuation} : null;
   if (OFFLINE && valuation?.status === "available") {
     const parts = Object.fromEntries(new Intl.DateTimeFormat("sv-SE", {timeZone:"Asia/Shanghai",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false}).formatToParts(new Date()).map((p) => [p.type,p.value]));
@@ -225,13 +283,30 @@ function renderBacktest(data) {
     ["profit","盈亏金额",profit,"总资产减初始资金，已计入发生的费用"],
   ].map(([field,label,value,note]) => `<div class="tracking-card" data-account-field="${field}"><h3>${label}</h3><div class="metric-value ${field === "profit" ? color(value) : ""}">${field === "profit" && value > 0 ? "+" : ""}${num(value)}<small> 元</small></div><p>${esc(note)}</p></div>`).join("")}</div><p class="muted">总资产 ${num(equity)} 元 = 持仓市值 + 可用资金 · 账户估值截至 ${dateLabel(s.through || last?.day)}</p>`;
   const parameterText = `资金 ${num(p.capital,0)}元 · 单只权重 ${num(p.weight * 100,0)}% · 最多${p.max_positions}只 · 持有${p.holding_days}交易日 · 每边佣金${num(p.commission_bps,1)}基点（最低${num(p.min_commission)}元） · 卖出税费${num(p.sell_tax_bps,1)}基点 · 每边过户费${num(p.transfer_bps,1)}基点 · 每边滑点${num(p.slippage_bps,1)}基点 · 前一日量能参与上限${num(p.participation * 100,1)}%`;
+  tradeRows = [...(data.trades || []).map((t) => ({...t,status:"closed"})), ...positions.map((t) => ({...t,status:"open"}))]
+    .sort((a,b) => (a.status === b.status ? String(b.exit_day || b.entry_day).localeCompare(String(a.exit_day || a.entry_day)) || a.code.localeCompare(b.code) : a.status === "open" ? -1 : 1));
+  tradeCutoff = s.through || data.summary.through;
+  tradeHoldingDays = p.holding_days;
+  const ledger = `<section class="panel research-panel"><div class="panel-heading"><div><h2>买卖时间与价格</h2><p>持仓优先、最近交易在前；日期为北京时间，开盘价加减滑点模拟。</p></div></div>
+    <div class="table-toolbar trade-toolbar"><label class="search"><input id="trade-search" type="search" aria-label="搜索模拟交易" placeholder="搜索名称、代码或策略" value="${esc(tradeSearch)}"></label><select id="trade-status" aria-label="模拟交易状态"><option value="all">全部交易</option><option value="open">当前持仓 / 待退出</option><option value="closed">已卖出</option></select><button id="export-trades" type="button" class="button secondary">导出当前明细 CSV</button></div>
+    <p id="trade-count" class="muted trade-count"></p><div id="trade-ledger" class="trade-grid"></div></section>`;
   let chart = "";
   if (curve.length > 1) {
     const values = curve.flatMap((r) => [r.return,r.benchmark_return ?? 0]), low = Math.min(...values), span = Math.max(...values) - low || 1;
     const points = (key) => curve.map((r,i) => `${num(20 + i/(curve.length-1)*560)},${num(140 - ((r[key] ?? 0)-low)/span*110)}`).join(" ");
     chart = `<svg class="price-chart" viewBox="0 0 600 165" role="img" aria-label="模拟组合与沪深300累计变化"><polyline class="chart-line" points="${points("return")}"/><polyline fill="none" stroke="#b18c54" stroke-width="2" points="${points("benchmark_return")}"/></svg><p class="muted">绿色：模拟组合 · 棕色：沪深300 · ${dateLabel(curve[0].day)} → ${dateLabel(curve[curve.length-1].day)}${live ? " · 最后一点为所标时点的盘中估值" : ""}</p>`;
   }
-  $("backtest-output").innerHTML = `${syncNotice}${valuationNotice}${data.stop ? `<div class="notice error">${esc(data.stop.reason)} · ${dateLabel(data.stop.day)}；净值仅计算至 ${dateLabel(s.through)}</div>` : ""}${accountCards}<div class="tracking-grid"><div class="tracking-card"><h3>模拟组合累计变化</h3><div class="metric-value">${pct(s.return)}</div><p>沪深300同期 ${pct(s.benchmark_return)}</p></div><div class="tracking-card"><h3>日线组合最大回撤</h3><div class="metric-value">${pct(s.max_drawdown)}</div><p>闭合交易 ${s.closed_trades || 0} / 未平仓 ${s.open_positions || 0}</p></div><div class="tracking-card"><h3>累计模拟费用</h3><div class="metric-value">${num(s.fees)} 元</div><p>未平仓费用只含已发生的入场费用</p></div></div>${chart}<p class="muted">${esc(data.method)}</p><p class="muted">参数：${esc(parameterText)}${OFFLINE ? " · 离线快照固定参数，需在本地服务中修改" : ""}</p><div class="research-grid">${Object.entries(data.skipped || {}).map(([reason,count]) => `<div class="research-card">${esc(reason)}：${count}</div>`).join("")}</div>${(data.periods || []).map((p) => `<p>${esc(p.label)} ${dateLabel(p.from)} → ${dateLabel(p.to)}：${pct(p.return)}</p>`).join("")}<details class="panel research-panel"><summary>模拟成交明细 · ${(data.trades || []).length}笔</summary><div class="table-wrap"><table><thead><tr><th>股票</th><th>入场 / 退出</th><th>股数 / 费用</th><th>扣费变化</th><th>退出原因</th></tr></thead><tbody>${(data.trades || []).map((t) => `<tr><td>${esc(t.name)}<small>${esc(t.code)} · ${esc(t.strategy)}</small></td><td>${dateLabel(t.entry_day)} / ${dateLabel(t.exit_day)}<small>${num(t.entry_price)} / ${num(t.exit_price)}</small></td><td>${t.shares} / ${num(t.fees)}元</td><td>${pct(t.net_return)}</td><td>${esc(t.exit_reason)}</td></tr>`).join("") || emptyRow("暂无已完成交易；查看上方跳过原因或继续积累行情",5)}</tbody></table></div></details><details class="panel research-panel"><summary>当前模拟持仓 · ${positions.length}只</summary>${positions.map((p) => `<p class="research-body">${esc(p.name)} ${esc(p.code)} · ${p.shares}股 · 入场 ${dateLabel(p.entry_day)} · 最近估值 ${num(p.mark)}元${p.quote_time ? ` · 行情 ${timeLabel(p.quote_time)}` : ""}${p.exit_due ? ` · ${esc(p.exit_due)}` : ""}</p>`).join("")}</details>`;
+  $("backtest-output").innerHTML = `${syncNotice}${valuationNotice}${data.stop ? `<div class="notice error">${esc(data.stop.reason)} · ${dateLabel(data.stop.day)}；净值仅计算至 ${dateLabel(data.summary.through)}</div>` : ""}${accountCards}
+    <p class="muted">已实现盈亏 ${num(s.realized_profit)} 元 · 持仓浮盈亏 ${num(s.unrealized_profit)} 元；两者合计为账户盈亏，浮盈亏仅扣已发生买入费用。</p>${ledger}
+    <div class="tracking-grid"><div class="tracking-card"><h3>模拟组合累计变化</h3><div class="metric-value">${pct(s.return)}</div><p>沪深300同期 ${pct(s.benchmark_return)}</p></div><div class="tracking-card"><h3>日线组合最大回撤</h3><div class="metric-value">${pct(s.max_drawdown)}</div><p>已卖出 ${s.closed_trades || 0} / 未平仓 ${s.open_positions || 0}</p></div><div class="tracking-card"><h3>累计模拟费用</h3><div class="metric-value">${num(s.fees)} 元</div><p>未平仓费用只含已发生的入场费用</p></div></div>${chart}
+    <details class="panel research-panel"><summary>模拟规则与参数</summary><div class="research-body"><p>${esc(data.method)}</p><p>${esc(parameterText)}${OFFLINE ? " · 离线快照固定参数，需在本地服务中修改" : ""}</p></div></details>
+    <details class="panel research-panel"><summary>未成交与退出延期原因</summary><div class="research-body research-grid">${Object.entries(data.skipped || {}).map(([reason,count]) => `<div class="research-card">${esc(reason)}：${count}</div>`).join("") || "暂无跳过记录"}</div></details>
+    ${(data.periods || []).map((p) => `<p>${esc(p.label)} ${dateLabel(p.from)} → ${dateLabel(p.to)}：${pct(p.return)}</p>`).join("")}`;
+  $("trade-status").value = tradeStatus;
+  renderTradeLedger();
+  $("trade-search").addEventListener("input", (e) => { tradeSearch = e.target.value; renderTradeLedger(); });
+  $("trade-status").addEventListener("change", (e) => { tradeStatus = e.target.value; renderTradeLedger(); });
+  $("export-trades").addEventListener("click", exportTradeLedger);
 }
 function openPlan(code) {
   const watch = state.watchlist.find((w) => w.code === code), plan = watch?.plan || {}, form = $("plan-form");

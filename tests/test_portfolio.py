@@ -61,6 +61,14 @@ def test_marks_do_not_mutate_daily_trades_cash_or_curve(settings, db):
     assert result['summary']['benchmark_return'] == pytest.approx(2)
     assert result['basis_day'] == '20261013'
     assert simulation == original
+    position = result['positions'][0]
+    assert position['profit'] == pytest.approx(shares * 10.6 - position['spent'])
+    assert position['market_value'] == pytest.approx(shares * 10.6)
+    assert position['net_return'] == pytest.approx(position['profit'] / position['spent'] * 100)
+    assert position['entry_price'] == original['positions'][0]['entry_price']
+    assert position['held_sessions'] == original['positions'][0]['held_sessions']
+    assert result['summary']['profit'] == pytest.approx(
+        result['summary']['realized_profit'] + result['summary']['unrealized_profit'])
     assert result['positions'][0]['mark'] == 10.6
     assert simulate(db, settings) == original
 

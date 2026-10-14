@@ -64,6 +64,13 @@ def fees(notional, config, sell=False):
         config.transfer_bps + (config.sell_tax_bps if sell else 0)) / 10000
 
 
+def position_value(position, mark):
+    """Unrealized P/L includes entry costs only; no sale is assumed."""
+    value = position["shares"] * mark
+    return {"market_value": value, "profit": value - position["spent"],
+            "net_return": (value / position["spent"] - 1) * 100}
+
+
 def simulate(db, settings, as_of=None, config=None):
     config = config or Simulation()
     config.validate()
@@ -111,7 +118,10 @@ def simulate(db, settings, as_of=None, config=None):
         entry_day = dates[index + 1]
         published = signal["payload"].get("published_at") or report_map.get(signal["day"], {}).get("generated_at")
         try:
-            timestamp = datetime.fromisoformat(published).astimezone(SHANGHAI)
+            timestamp = datetime.fromisoformat(published)
+            if timestamp.tzinfo is None:
+                raise ValueError("发布时间缺少时区")
+            timestamp = timestamp.astimezone(SHANGHAI)
             deadline = datetime.strptime(entry_day + "0930", "%Y%m%d%H%M").replace(tzinfo=SHANGHAI)
             timely = timestamp < deadline and timestamp.strftime("%Y%m%d") >= signal["day"]
         except (TypeError, ValueError):
@@ -119,7 +129,7 @@ def simulate(db, settings, as_of=None, config=None):
         if not timely:
             skipped["事后生成或发布时间缺失"] += 1
             continue
-        entries[entry_day].append(signal)
+        entries[entry_day].append({**signal, "published_at": timestamp.isoformat()})
     cash, peak, drawdown = config.capital, config.capital, 0
     positions, trades, curve = {}, [], []
     stop = None
@@ -155,13 +165,16 @@ def simulate(db, settings, as_of=None, config=None):
             limit, _ = board(code)
             if not row or not previous or row["open"] <= previous["close"] * (1 - limit + .001):
                 skipped["退出延期：停牌、缺少昨收或开盘接近跌停"] += 1
+                position["exit_delays"].append({"day": day, "reason": "停牌、缺少昨收或开盘接近跌停"})
                 continue
             sell_price = row["open"] * (1 - config.slippage_bps / 10000)
             if sell_price < row["low"]:
                 skipped["退出延期：滑点价格超出日内范围"] += 1
+                position["exit_delays"].append({"day": day, "reason": "滑点价格超出日内范围"})
                 continue
             if position["shares"] > previous["volume"] * config.participation:
                 skipped["退出延期：超过此前交易日成交量参与上限"] += 1
+                position["exit_delays"].append({"day": day, "reason": "超过此前交易日成交量参与上限"})
                 continue
             gross = position["shares"] * sell_price
             cost = fees(gross, config, sell=True)
@@ -170,6 +183,17 @@ def simulate(db, settings, as_of=None, config=None):
                            "signal_day": position["signal_day"], "entry_day": position["entry_day"],
                            "exit_day": day, "shares": position["shares"], "entry_price": position["entry_price"],
                            "exit_price": sell_price, "fees": cost + position["entry_fee"],
+                           "entry_open": position["entry_open"], "exit_open": row["open"],
+                           "entry_fee": position["entry_fee"], "exit_fee": cost,
+                           "spent": position["spent"], "proceeds": gross - cost,
+                           "profit": gross - cost - position["spent"],
+                           "held_sessions": index - position["entry_index"],
+                           "published_at": position["published_at"], "label": position["label"],
+                           "rule_version": position["rule_version"], "entry_reasons": position["entry_reasons"],
+                           "invalidation_price": position["invalidation_price"],
+                           "exit_trigger_day": position["exit_trigger_day"],
+                           "exit_trigger_close": position["exit_trigger_close"],
+                           "exit_delays": position["exit_delays"],
                            "net_return": ((gross - cost) / position["spent"] - 1) * 100,
                            "exit_reason": position["exit_due"]})
             del positions[code]
@@ -214,9 +238,16 @@ def simulate(db, settings, as_of=None, config=None):
             cash -= gross + cost
             positions[code] = {"shares": shares, "entry_day": day, "entry_index": index, "entry_price": price,
                                "entry_fee": cost, "spent": gross + cost, "adj": row["adj"], "mark": price,
+                               "entry_open": row["open"], "published_at": signal["published_at"],
+                               "label": payload.get("label", signal["strategy"]),
+                               "rule_version": payload.get("rule_version", ""),
+                               "entry_reasons": payload.get("reasons", []),
+                               "invalidation_price": payload["invalidation_adj"] / row["adj"],
+                               "exit_trigger_day": None, "exit_trigger_close": None, "exit_delays": [],
                                "signal_day": signal["day"], "name": payload["name"], "strategy": signal["strategy"],
                                "invalidation_adj": payload["invalidation_adj"], "exit_due": None}
         for code, position in positions.items():
+            position["held_sessions"] = index - position["entry_index"] + 1
             row = history.get((code, day))
             if row:
                 position["mark"] = row["close"]
@@ -224,6 +255,9 @@ def simulate(db, settings, as_of=None, config=None):
                     position["exit_due"] = "前一收盘失效，下一可模拟开盘退出"
             if not position["exit_due"] and index - position["entry_index"] + 1 >= config.holding_days:
                 position["exit_due"] = "持有期届满，下一可模拟开盘退出"
+            if position["exit_due"] and not position["exit_trigger_day"]:
+                position["exit_trigger_day"] = day
+                position["exit_trigger_close"] = row["close"] if row else None
         equity = cash + sum(p["shares"] * p["mark"] for p in positions.values())
         peak = max(peak, equity)
         drawdown = min(drawdown, (equity / peak - 1) * 100)
@@ -245,17 +279,23 @@ def simulate(db, settings, as_of=None, config=None):
                                 "return": (points[-1]["equity"] / start_equity - 1) * 100})
     return {"status": "incomplete" if stop else "success", "as_of": latest, "stop": stop,
             "parameters": asdict(config), "curve": curve, "trades": trades, "skipped": dict(skipped),
-            "positions": [{"code": c, **p} for c, p in positions.items()], "periods": periods,
+            "positions": [{"code": c, **p, **position_value(p, p["mark"])} for c, p in positions.items()],
+            "periods": periods,
             "summary": {"return": final["return"], "benchmark_return": final["benchmark_return"],
                         "initial_capital": config.capital,
                         "market_value": final["equity"] - final["cash"] if curve else None,
                         "available_cash": final["cash"] if curve else None,
                         "equity": final["equity"] if curve else None,
                         "profit": final["equity"] - config.capital if curve else None,
+                        "realized_profit": sum(t["profit"] for t in trades) if curve else None,
+                        "unrealized_profit": sum(position_value(p, p["mark"])["profit"]
+                                                 for p in positions.values()) if curve else None,
                         "max_drawdown": drawdown, "closed_trades": len(trades), "open_positions": len(positions),
                         "fees": sum(t["fees"] for t in trades) + sum(p["entry_fee"] for p in positions.values()),
                         "through": curve[-1]["day"] if curve else None},
             "method": "下一交易日开盘入场，买入后最早下一交易日卖出；失效或持有期到期后的下一开盘退出。"
+                      "买卖时间仅表示交易日期和开盘模拟时段，不是实际成交时间；模拟价格为开盘价加减滑点。"
+                      "失效按收盘价判断，不是盘中触价立即止损。已卖出盈亏扣除双边费用，未卖出浮盈亏仅扣买入费用。"
                       "按现金、最小申报数量、费用、滑点和前一日量能限制模拟；开盘接近涨跌停保守不成交。"
                       "缺失持仓行情或分红送转细节时停止净值。日线不能证明真实成交；费用是可修改假设。"
                       "历史名称/行业/风险状态与数据修订不完全具备时点性，仍有历史偏差；事后生成的信号排除。"
