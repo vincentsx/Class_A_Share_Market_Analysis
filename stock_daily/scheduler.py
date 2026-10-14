@@ -159,7 +159,10 @@ def worker(db, settings):
 
 def _portfolio_loop(db, settings, stopped):
     """Keep quote cadence independent of lengthy report exports and site uploads."""
+    from .live_publish import publish_portfolio
     from .portfolio import portfolio_due, refresh_portfolio
+
+    publish_checked_at = None
 
     while not stopped.is_set():
         try:
@@ -167,6 +170,12 @@ def _portfolio_loop(db, settings, stopped):
                 refresh_portfolio(db, settings)
         except Exception:
             logger.warning("盘中估值未完成，保留已保存行情并标注时效", exc_info=True)
+        if settings.pages_enabled and (publish_checked_at is None or now() - publish_checked_at >= timedelta(minutes=1)):
+            publish_checked_at = now()
+            try:
+                publish_portfolio(db, settings)
+            except Exception:
+                logger.warning("公开持仓轻量同步未完成，将重试；盘中采集继续", exc_info=True)
         stopped.wait(30)
 
 

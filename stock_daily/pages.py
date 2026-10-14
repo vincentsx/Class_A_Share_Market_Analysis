@@ -93,11 +93,13 @@ def export_pages(db, settings, output="data/pages", render_image=None):
         payload = daily_payload(db, settings, days[0]["day"], public=True, portfolio=True)
         valuation = payload["backtest"].get("valuation", {})
         report = payload["dashboard"]["report"]
-        portfolio_day = valuation.get("day", report["day"])
+        # The live feed updates independently. Keep its HTML shell stable between daily reports.
+        portfolio_day = report["day"] if payload.get("live_url") else valuation.get("day", report["day"])
         if portfolio_day not in dates:
             dates = sorted({portfolio_day, *dates}, reverse=True)
         entries.append({"day": portfolio_day, "slot": "portfolio", "payload": payload,
-                        "data_at": valuation.get("captured_at", report.get("generated_at", "")), "news_at": ""})
+                        "data_at": (report.get("generated_at", "") if payload.get("live_url")
+                                    else valuation.get("captured_at", report.get("generated_at", ""))), "news_at": ""})
     entries.sort(key=lambda r: (r["day"], r["data_at"], {"midday": 0, "close": 1, "evening": 2,
                                                        "portfolio": 3}[r["slot"]]), reverse=True)
     if not entries:
@@ -116,6 +118,8 @@ def export_pages(db, settings, output="data/pages", render_image=None):
             payload = entry["payload"]
             fingerprint_payload = copy.deepcopy(payload)
             fingerprint_payload.pop("exported_at", None)
+            if payload.get("live_url"):
+                fingerprint_payload["backtest"].pop("valuation", None)
             fingerprint = digest(json.dumps([VERSION, asset_signature, fingerprint_payload], sort_keys=True,
                                             ensure_ascii=False, allow_nan=False).encode())
             name = f"reports/{settings.source}-{entry['day']}-{entry['slot']}.html"
@@ -143,7 +147,9 @@ def export_pages(db, settings, output="data/pages", render_image=None):
         latest = manifest["reports"][0]
         slot_reports = {slot: next((r for r in manifest["reports"] if r["slot"] == slot), None) for slot in SLOTS}
         atomic_write(stage / "index.html", env.get_template("pages.html").render(
-            latest=latest, slots=slot_reports, dates=dates, reports=manifest["reports"], built_at=manifest["built_at"]))
+            latest=latest, slots=slot_reports, dates=dates, reports=manifest["reports"], built_at=manifest["built_at"],
+            live_url=next((e["payload"].get("live_url", "") for e in entries if e["slot"] == "portfolio"), ""),
+            live_javascript=(ASSETS / "static/public_live.js").read_text()))
         for alias, report in {"latest": latest, **slot_reports}.items():
             if report:
                 # Controlled relative filenames work under a GitHub project subpath.
@@ -173,7 +179,7 @@ def export_pages(db, settings, output="data/pages", render_image=None):
 
 def gh(*arguments, check=True):
     try:
-        timeout = 420 if arguments[:2] == ("release", "upload") else 180
+        timeout = 420 if arguments[:2] == ("release", "upload") else 30 if arguments[0] == "api" else 180
         result = subprocess.run(["gh", *arguments], capture_output=True, text=True, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired):
         raise DataError("GitHub命令不可用或超时；请检查gh安装、登录及网络") from None

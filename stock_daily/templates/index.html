@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>收盘之后 · {{ '本地离线报告' if offline else 'A股研究台' }}</title>
   {% if offline %}
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-{{ nonce }}'; style-src 'nonce-{{ nonce }}'; img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-{{ nonce }}'; style-src 'nonce-{{ nonce }}'; img-src data:; connect-src {{ ('https://raw.githubusercontent.com' if live_feed else "'none'")|safe }}; base-uri 'none'; form-action 'none'">
   <style nonce="{{ nonce }}">{{ css|safe }}</style>
   <script id="offline-snapshot" type="application/json">{{ snapshot|safe }}</script>
   {% else %}
@@ -34,7 +34,7 @@
       <div class="page-heading"><div><div class="eyebrow">AFTER THE CLOSE</div><h1 id="page-title">把今天的市场，看清楚。</h1><p id="subtitle">市场广度、行业强弱与值得跟踪的变化。</p></div>
         <div class="heading-actions"><label class="sr-only" for="date-select">报告日期</label><select id="date-select"><option>{% if offline %}{{ static_report.day or "暂无报告" }}{% else %}加载中{% endif %}</option></select><button id="refresh" class="button secondary">↻ 刷新</button></div></div>
       <div id="demo-banner" class="notice demo" hidden><b>示例工作台</b><span>全部行情、公司名称和公告均为合成数据；工作日历不代表真实交易日历。</span></div>
-      {% if offline %}<div class="notice"><b>{{ "公开持仓快照" if portfolio_report and public_report else "本地离线快照" }} · 只读</b><span>导出于 {{ exported_at }}。{% if portfolio_report %}已确认持仓按所标行情时间估值；在线展示页每10分钟重载，部署完成后可看到更新。{% else %}内容截止于所标日期，文件不会自动获取行情；重新导出后再打开查看更新。{% endif %}</span></div>{% endif %}
+      {% if offline %}<div class="notice"><b>{{ "公开模拟持仓" if portfolio_report and public_report else "本地离线快照" }} · 只读</b><span>导出于 {{ exported_at }}。{% if live_feed %}在线持仓每分钟检查轻量数据；行情每10分钟采集。下载到本地的文件保留导出时快照。{% elif portfolio_report %}已确认持仓按所标行情时间估值；在线展示页每10分钟重载，部署完成后可看到更新。{% else %}内容截止于所标日期，文件不会自动获取行情；重新导出后再打开查看更新。{% endif %}</span></div>{% endif %}
       {% if not offline %}<div class="notice"><b>每日三次 · HTML与PNG</b><span>{{ midday_time }}午间快照 / {{ schedule_time }}收盘快照 / {{ announcement_time }}日线分析；盘中持仓每{{ portfolio_interval_minutes }}分钟估值。<a href="/artifacts/{{ source }}-latest.html" target="_blank" rel="noopener">查看最新HTML</a> · <a href="/artifacts/{{ source }}-latest.png" target="_blank" rel="noopener">查看最新PNG</a>。下方工作台显示已核验的日线报告。</span></div>{% endif %}
       {% if offline %}{% with mail=static_report %}{% include "mail_report.html" %}{% endwith %}{% endif %}
       <div id="message" class="notice" role="status" hidden></div>

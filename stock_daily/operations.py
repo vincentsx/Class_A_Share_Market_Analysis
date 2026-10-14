@@ -124,4 +124,5 @@ def health_view(db, settings, current=None):
             "next_tasks": next_tasks, "stages": stages, "backup": state(db, settings, "backup"),
             "backup_enabled": settings.backup_enabled, "pages": pages,
             "portfolio": {**state(db, settings, "portfolio_refresh"),
-                          "interval_minutes": settings.portfolio_interval_minutes}}
+                          "interval_minutes": settings.portfolio_interval_minutes},
+            "portfolio_publish": state(db, settings, "portfolio_publish")}

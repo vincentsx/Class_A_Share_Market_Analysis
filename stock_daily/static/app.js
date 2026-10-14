@@ -14,7 +14,7 @@ const OFFLINE = offlineElement ? JSON.parse(offlineElement.textContent) : null;
 if (OFFLINE) {
   $("add-watch").hidden = true;
   $("date-select").disabled = true;
-  $("refresh").textContent = "↻ 重载文件";
+  $("refresh").textContent = OFFLINE.live_url && /^https?:$/.test(location.protocol) ? "↻ 更新持仓" : "↻ 重载文件";
 }
 
 async function api(path, options = {}) {
@@ -148,7 +148,7 @@ function renderOperations(data) {
   $("worker-chip").textContent = labels[data.worker.status] || data.worker.status;
   $("worker-chip").className = `chip${data.worker.status === "running" ? "" : " amber"}`;
   const stages = {success:"完成", failed:"失败", running:"运行中", skipped:"跳过", not_run:"尚无记录"};
-  $("operations-content").innerHTML = `<p>状态检查 ${timeLabel(data.checked_at)} · worker心跳 ${timeLabel(data.worker.at)} · ${esc(data.worker.phase || "尚无记录；请启动或重启worker")}${OFFLINE ? " · 此处为导出时的状态" : ""}</p><p>最新日线 ${dateLabel(data.latest_daily)} · 最新快照 ${dateLabel(data.latest_snapshot?.day)} ${esc(data.latest_snapshot?.slot || "")}</p><div class="research-grid">${data.next_tasks.map((t) => `<div class="research-card"><b>${esc({midday:"午间",close:"收盘",evening:"晚间"}[t.kind])} ${timeLabel(t.at)}</b><p>${t.calendar_verified ? "已保存交易日历中的下一时段" : "下一次时段检查，交易日历待核验"}</p></div>`).join("")}</div><div class="research-grid">${data.stages.map((s) => `<div class="research-card"><b>${esc(s.label)} · ${esc(stages[s.status] || s.status)}</b><p>${timeLabel(s.started_at)} · ${esc(s.message || "")}</p></div>`).join("")}</div><p>数据库备份：${data.backup_enabled ? esc({success:"成功",failed:"失败"}[data.backup.status] || "等待首次备份") : "未启用"} · ${timeLabel(data.backup.at)} ${esc(data.backup.file || "")}</p><p>盘中持仓估值：每${data.portfolio?.interval_minutes || 10}分钟 · ${esc({success:"已采集",failed:"采集失败",skipped:"非交易日",running:"采集中"}[data.portfolio?.status] || "等待交易时段")} · ${timeLabel(data.portfolio?.at)}</p>${data.pages.status ? `<p>公开网站：${esc(data.pages.status)} · ${timeLabel(data.pages.at)}；已触发上传不等于部署完成。</p>` : ""}`;
+  $("operations-content").innerHTML = `<p>状态检查 ${timeLabel(data.checked_at)} · worker心跳 ${timeLabel(data.worker.at)} · ${esc(data.worker.phase || "尚无记录；请启动或重启worker")}${OFFLINE ? " · 此处为导出时的状态" : ""}</p><p>最新日线 ${dateLabel(data.latest_daily)} · 最新快照 ${dateLabel(data.latest_snapshot?.day)} ${esc(data.latest_snapshot?.slot || "")}</p><div class="research-grid">${data.next_tasks.map((t) => `<div class="research-card"><b>${esc({midday:"午间",close:"收盘",evening:"晚间"}[t.kind])} ${timeLabel(t.at)}</b><p>${t.calendar_verified ? "已保存交易日历中的下一时段" : "下一次时段检查，交易日历待核验"}</p></div>`).join("")}</div><div class="research-grid">${data.stages.map((s) => `<div class="research-card"><b>${esc(s.label)} · ${esc(stages[s.status] || s.status)}</b><p>${timeLabel(s.started_at)} · ${esc(s.message || "")}</p></div>`).join("")}</div><p>数据库备份：${data.backup_enabled ? esc({success:"成功",failed:"失败"}[data.backup.status] || "等待首次备份") : "未启用"} · ${timeLabel(data.backup.at)} ${esc(data.backup.file || "")}</p><p>盘中持仓估值：每${data.portfolio?.interval_minutes || 10}分钟 · ${esc({success:"已采集",failed:"采集失败",skipped:"非交易日",running:"采集中"}[data.portfolio?.status] || "等待交易时段")} · ${timeLabel(data.portfolio?.at)}</p><p>公开持仓轻量同步：${esc({success:"已同步",failed:"同步失败"}[data.portfolio_publish?.status] || "等待同步")} · 行情 ${timeLabel(data.portfolio_publish?.quote_at)} · 同步 ${timeLabel(data.portfolio_publish?.at)}</p>${data.pages.status ? `<p>公开网站：${esc(data.pages.status)} · ${timeLabel(data.pages.at)}；已触发上传不等于部署完成。</p>` : ""}`;
 }
 function renderChanges(data) {
   if (!data) { $("daily-changes").textContent = "当前快照尚未保存变化分析。"; return; }
@@ -208,7 +208,7 @@ function renderBacktest(data) {
   const s = live || data.summary, curve = [...(data.curve || [])];
   const positions = live ? valuation.positions : data.positions || [];
   if (live) curve.push({day:valuation.day,equity:s.equity,cash:s.available_cash,return:s.return,benchmark_return:s.benchmark_return});
-  const valuationNotice = valuation ? `<div class="notice${valuation.status === "stale" || valuation.status === "unavailable" ? " error" : ""}"><b>${live ? "盘中持仓估值" : "日线账户估值"}</b><span>${esc(valuation.message)}${live ? ` 行情 ${timeLabel(valuation.quote_start)}～${timeLabel(valuation.quote_end)} · 采集 ${timeLabel(valuation.captured_at)}` : ""} · 交易时段每${valuation.interval_minutes}分钟采集${OFFLINE ? " · 公开页面需等待网站部署更新" : ""}</span></div>` : "";
+  const valuationNotice = valuation ? `<div class="notice${valuation.status === "stale" || valuation.status === "unavailable" ? " error" : ""}"><b>${live ? "盘中持仓估值" : "日线账户估值"}</b><span>${esc(valuation.message)}${live ? ` 行情 ${timeLabel(valuation.quote_start)}～${timeLabel(valuation.quote_end)} · 采集 ${timeLabel(valuation.captured_at)}` : ""} · 交易时段每${valuation.interval_minutes}分钟采集${OFFLINE ? " · 在线持仓独立同步" : ""}</span></div>` : "";
   const p = data.parameters || {};
   const last = curve[curve.length - 1];
   const initial = s.initial_capital ?? p.capital ?? null;
@@ -315,7 +315,7 @@ $("candidate-search").addEventListener("input",renderCandidates);
 $("candidate-scope").addEventListener("change",renderCandidates);
 $("candidate-table").addEventListener("click",(e) => {const b=e.target.closest(".row-detail");if(b)showDetail(b.dataset.code,b.dataset.rule);});
 $("date-select").addEventListener("change",() => {selectedDay = $("date-select").value; load();});
-$("refresh").addEventListener("click",() => OFFLINE ? window.location.reload() : load());
+$("refresh").addEventListener("click",() => OFFLINE?.live_url && /^https?:$/.test(location.protocol) ? refreshPublicPortfolio() : OFFLINE ? window.location.reload() : load());
 $("method-button").addEventListener("click",() => $("method-dialog").showModal());
 $("mobile-method").addEventListener("click",() => $("method-dialog").showModal());
 $("add-watch").addEventListener("click",() => {$("watch-error").textContent="";$("watch-dialog").showModal();});
@@ -331,11 +331,37 @@ $("watch-table").addEventListener("click",async (e) => {
   if (edit) { openPlan(edit.dataset.code); return; }
   const b=e.target.closest(".remove-watch");if(!b)return;const key=window.prompt(`移除 ${b.dataset.code}：请输入 APP_API_KEY`);if(!key)return;try{await api(`/api/watchlist/${b.dataset.code}`,{method:"DELETE",headers:{Authorization:`Bearer ${key}`}});await load();}catch(error){message(error.message,true);}
 });
-load().then(() => { if (OFFLINE?.portfolio) switchView("backtest"); });
+load().then(() => { if (OFFLINE?.portfolio) { switchView("backtest"); refreshPublicPortfolio(); } });
 setInterval(() => {
   if (!OFFLINE && state && !document.hidden && !document.querySelector("dialog[open]") && !$("refresh").disabled && !$("backtest-form").querySelector("button").disabled) load();
 }, 30000);
 
-if (OFFLINE?.portfolio && OFFLINE.public && /^https?:$/.test(location.protocol)) {
+if (OFFLINE?.portfolio && OFFLINE.public && !OFFLINE.live_url && /^https?:$/.test(location.protocol)) {
   setInterval(() => { if (!document.hidden) location.replace(new URL("../portfolio.html", location.href)); }, 600000);
 }
+
+let publicPortfolioPending = false;
+async function refreshPublicPortfolio() {
+  if (!OFFLINE?.live_url || !OFFLINE.public || !OFFLINE.portfolio || !/^https?:$/.test(location.protocol) || publicPortfolioPending) return;
+  publicPortfolioPending = true;
+  const controller = new AbortController(), timeout = setTimeout(() => controller.abort(),15000);
+  try {
+    const url = new URL(OFFLINE.live_url);
+    url.searchParams.set("t",String(Date.now()));
+    const response = await fetch(url,{cache:"no-store",credentials:"omit",signal:controller.signal});
+    if (!response.ok) throw new Error("最新持仓同步暂不可用，保留当前估值；请查看行情时间。");
+    const data = await response.json();
+    if (data.version !== "portfolio-live-v1" || data.source !== OFFLINE.dashboard.source || !data.backtest?.summary || !Number.isFinite(Date.parse(data.data_at))) throw new Error("公开持仓数据格式无效，保留当前估值。");
+    const previousAt = OFFLINE.backtest?.valuation?.captured_at;
+    if (previousAt && Date.parse(data.data_at) < Date.parse(previousAt)) {
+      message(`当前文件行情 ${timeLabel(previousAt)} 较新，保留当前估值；轻量数据正在同步。`);
+      return;
+    }
+    OFFLINE.backtest = data.backtest;
+    if (currentView === "backtest") renderBacktest(data.backtest);
+    message(`行情采集 ${timeLabel(data.data_at)} · 公开同步 ${timeLabel(data.published_at)} · 页面每分钟检查更新。`);
+  } catch (error) { message(error.message,true); }
+  finally { clearTimeout(timeout); publicPortfolioPending = false; }
+}
+setInterval(() => { if (!document.hidden) refreshPublicPortfolio(); },60000);
+document.addEventListener("visibilitychange",() => { if (!document.hidden) refreshPublicPortfolio(); });

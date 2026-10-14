@@ -76,9 +76,12 @@ def daily_payload(db, settings, day=None, public=False, portfolio=False):
         from .portfolio import value_portfolio
 
         simulation["valuation"] = value_portfolio(db, settings, simulation)
+    from .live_publish import live_url
+
     return {"dashboard": data, "tracking": observations, "histories": histories,
             "backtest": simulation,
-            "exported_at": now().isoformat(), "public": public, "portfolio": portfolio}
+            "exported_at": now().isoformat(), "public": public, "portfolio": portfolio,
+            "live_url": live_url(settings) if public and portfolio else ""}
 
 
 def render_daily(payload, settings):
@@ -88,6 +91,7 @@ def render_daily(payload, settings):
         source=settings.source,
         public_report=payload.get("public", False),
         portfolio_report=payload.get("portfolio", False),
+        live_feed=bool(payload.get("live_url")),
         offline=True,
         nonce=secrets.token_urlsafe(24),
         exported_at=now().strftime("%Y-%m-%d %H:%M（北京时间）"),

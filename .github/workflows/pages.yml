@@ -19,6 +19,8 @@ jobs:
       name: github-pages
       url: ${{ steps.deployment.outputs.page_url }}
     steps:
+      - name: Checkout public interface
+        uses: actions/checkout@v4
       - name: Configure Pages
         uses: actions/configure-pages@v5
       - name: Download public report bundle
@@ -35,6 +37,12 @@ jobs:
           PY
           test -f site/index.html
           test -f site/manifest.json
+      - name: Refresh public live interface
+        env:
+          REPORT_REPOSITORY: ${{ github.repository }}
+        run: |
+          python3 -m pip install 'Jinja2>=3.1,<4'
+          python3 .github/scripts/refresh_public_ui.py site "$REPORT_REPOSITORY"
       - name: Upload website
         uses: actions/upload-pages-artifact@v4
         with:
