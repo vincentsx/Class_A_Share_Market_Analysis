@@ -2,9 +2,16 @@ name: Publish reports to GitHub Pages
 
 on:
   workflow_dispatch:
+    inputs:
+      reuse_deployed:
+        description: Refresh interface using the last deployed public artifact
+        required: false
+        type: boolean
+        default: false
 
 permissions:
   contents: read
+  actions: read
   pages: write
   id-token: write
 
@@ -27,12 +34,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           REPORT_REPOSITORY: ${{ github.repository }}
+          REUSE_DEPLOYED: ${{ inputs.reuse_deployed && 'true' || 'false' }}
         run: |
-          gh release download pages-report-data --repo "$REPORT_REPOSITORY" --pattern site.tar.gz
+          if [ "$REUSE_DEPLOYED" = "true" ]; then
+            report_run_id=$(gh run list --repo "$REPORT_REPOSITORY" --workflow pages.yml --limit 20 --json databaseId,status,conclusion --jq 'map(select(.status == "completed" and .conclusion == "success"))[0].databaseId')
+            gh run download "$report_run_id" --repo "$REPORT_REPOSITORY" --name github-pages --dir previous
+          else
+            gh release download pages-report-data --repo "$REPORT_REPOSITORY" --pattern site.tar.gz
+          fi
           mkdir site
           python3 - <<'PY'
+          import os
           import tarfile
-          with tarfile.open('site.tar.gz') as archive:
+          path = 'previous/artifact.tar' if os.environ['REUSE_DEPLOYED'] == 'true' else 'site.tar.gz'
+          with tarfile.open(path) as archive:
               archive.extractall('site', filter='data')
           PY
           test -f site/index.html

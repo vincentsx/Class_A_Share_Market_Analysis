@@ -5,7 +5,7 @@
   <meta name="viewport" content="width=device-width,initial-scale=1">
   <title>收盘之后 · {{ '本地离线报告' if offline else 'A股研究台' }}</title>
   {% if offline %}
-  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-{{ nonce }}'; style-src 'nonce-{{ nonce }}'; img-src data:; connect-src {{ ('https://raw.githubusercontent.com' if live_feed else "'none'")|safe }}; base-uri 'none'; form-action 'none'">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-{{ nonce }}'; style-src 'nonce-{{ nonce }}'; img-src data:; connect-src {{ ('https://raw.githubusercontent.com https://api.github.com' if live_feed else "'none'")|safe }}; base-uri 'none'; form-action 'none'">
   <style nonce="{{ nonce }}">{{ css|safe }}</style>
   <script id="offline-snapshot" type="application/json">{{ snapshot|safe }}</script>
   {% else %}

@@ -10,6 +10,7 @@ const emptyRow = (text, columns) => `<tr><td colspan="${columns}" class="empty-r
 let state = null, strategy = "all", currentView = "overview", refreshId = 0, selectedDay = "", trackingData = null, aiSummaryPending = false;
 const offlineElement = document.getElementById("offline-snapshot");
 const OFFLINE = offlineElement ? JSON.parse(offlineElement.textContent) : null;
+let publicSyncState = {status:"idle",text:"等待同步最新持仓"}, lastPublicApiAttempt = 0;
 
 if (OFFLINE) {
   $("add-watch").hidden = true;
@@ -208,6 +209,7 @@ function renderBacktest(data) {
   const s = live || data.summary, curve = [...(data.curve || [])];
   const positions = live ? valuation.positions : data.positions || [];
   if (live) curve.push({day:valuation.day,equity:s.equity,cash:s.available_cash,return:s.return,benchmark_return:s.benchmark_return});
+  const syncNotice = OFFLINE?.public && OFFLINE.portfolio && /^https?:$/.test(location.protocol) ? `<div id="portfolio-sync-status" class="notice${publicSyncState.status === "failed" ? " error" : ""}" role="status"><span>${esc(publicSyncState.text)}</span><button type="button" class="button secondary" data-action="retry-live">重新同步</button><a href="../portfolio.html?v=${Date.now()}">打开最新持仓</a></div>` : "";
   const valuationNotice = valuation ? `<div class="notice${valuation.status === "stale" || valuation.status === "unavailable" ? " error" : ""}"><b>${live ? "盘中持仓估值" : "日线账户估值"}</b><span>${esc(valuation.message)}${live ? ` 行情 ${timeLabel(valuation.quote_start)}～${timeLabel(valuation.quote_end)} · 采集 ${timeLabel(valuation.captured_at)}` : ""} · 交易时段每${valuation.interval_minutes}分钟采集${OFFLINE ? " · 在线持仓独立同步" : ""}</span></div>` : "";
   const p = data.parameters || {};
   const last = curve[curve.length - 1];
@@ -229,7 +231,7 @@ function renderBacktest(data) {
     const points = (key) => curve.map((r,i) => `${num(20 + i/(curve.length-1)*560)},${num(140 - ((r[key] ?? 0)-low)/span*110)}`).join(" ");
     chart = `<svg class="price-chart" viewBox="0 0 600 165" role="img" aria-label="模拟组合与沪深300累计变化"><polyline class="chart-line" points="${points("return")}"/><polyline fill="none" stroke="#b18c54" stroke-width="2" points="${points("benchmark_return")}"/></svg><p class="muted">绿色：模拟组合 · 棕色：沪深300 · ${dateLabel(curve[0].day)} → ${dateLabel(curve[curve.length-1].day)}${live ? " · 最后一点为所标时点的盘中估值" : ""}</p>`;
   }
-  $("backtest-output").innerHTML = `${valuationNotice}${data.stop ? `<div class="notice error">${esc(data.stop.reason)} · ${dateLabel(data.stop.day)}；净值仅计算至 ${dateLabel(s.through)}</div>` : ""}${accountCards}<div class="tracking-grid"><div class="tracking-card"><h3>模拟组合累计变化</h3><div class="metric-value">${pct(s.return)}</div><p>沪深300同期 ${pct(s.benchmark_return)}</p></div><div class="tracking-card"><h3>日线组合最大回撤</h3><div class="metric-value">${pct(s.max_drawdown)}</div><p>闭合交易 ${s.closed_trades || 0} / 未平仓 ${s.open_positions || 0}</p></div><div class="tracking-card"><h3>累计模拟费用</h3><div class="metric-value">${num(s.fees)} 元</div><p>未平仓费用只含已发生的入场费用</p></div></div>${chart}<p class="muted">${esc(data.method)}</p><p class="muted">参数：${esc(parameterText)}${OFFLINE ? " · 离线快照固定参数，需在本地服务中修改" : ""}</p><div class="research-grid">${Object.entries(data.skipped || {}).map(([reason,count]) => `<div class="research-card">${esc(reason)}：${count}</div>`).join("")}</div>${(data.periods || []).map((p) => `<p>${esc(p.label)} ${dateLabel(p.from)} → ${dateLabel(p.to)}：${pct(p.return)}</p>`).join("")}<details class="panel research-panel"><summary>模拟成交明细 · ${(data.trades || []).length}笔</summary><div class="table-wrap"><table><thead><tr><th>股票</th><th>入场 / 退出</th><th>股数 / 费用</th><th>扣费变化</th><th>退出原因</th></tr></thead><tbody>${(data.trades || []).map((t) => `<tr><td>${esc(t.name)}<small>${esc(t.code)} · ${esc(t.strategy)}</small></td><td>${dateLabel(t.entry_day)} / ${dateLabel(t.exit_day)}<small>${num(t.entry_price)} / ${num(t.exit_price)}</small></td><td>${t.shares} / ${num(t.fees)}元</td><td>${pct(t.net_return)}</td><td>${esc(t.exit_reason)}</td></tr>`).join("") || emptyRow("暂无已完成交易；查看上方跳过原因或继续积累行情",5)}</tbody></table></div></details><details class="panel research-panel"><summary>当前模拟持仓 · ${positions.length}只</summary>${positions.map((p) => `<p class="research-body">${esc(p.name)} ${esc(p.code)} · ${p.shares}股 · 入场 ${dateLabel(p.entry_day)} · 最近估值 ${num(p.mark)}元${p.quote_time ? ` · 行情 ${timeLabel(p.quote_time)}` : ""}${p.exit_due ? ` · ${esc(p.exit_due)}` : ""}</p>`).join("")}</details>`;
+  $("backtest-output").innerHTML = `${syncNotice}${valuationNotice}${data.stop ? `<div class="notice error">${esc(data.stop.reason)} · ${dateLabel(data.stop.day)}；净值仅计算至 ${dateLabel(s.through)}</div>` : ""}${accountCards}<div class="tracking-grid"><div class="tracking-card"><h3>模拟组合累计变化</h3><div class="metric-value">${pct(s.return)}</div><p>沪深300同期 ${pct(s.benchmark_return)}</p></div><div class="tracking-card"><h3>日线组合最大回撤</h3><div class="metric-value">${pct(s.max_drawdown)}</div><p>闭合交易 ${s.closed_trades || 0} / 未平仓 ${s.open_positions || 0}</p></div><div class="tracking-card"><h3>累计模拟费用</h3><div class="metric-value">${num(s.fees)} 元</div><p>未平仓费用只含已发生的入场费用</p></div></div>${chart}<p class="muted">${esc(data.method)}</p><p class="muted">参数：${esc(parameterText)}${OFFLINE ? " · 离线快照固定参数，需在本地服务中修改" : ""}</p><div class="research-grid">${Object.entries(data.skipped || {}).map(([reason,count]) => `<div class="research-card">${esc(reason)}：${count}</div>`).join("")}</div>${(data.periods || []).map((p) => `<p>${esc(p.label)} ${dateLabel(p.from)} → ${dateLabel(p.to)}：${pct(p.return)}</p>`).join("")}<details class="panel research-panel"><summary>模拟成交明细 · ${(data.trades || []).length}笔</summary><div class="table-wrap"><table><thead><tr><th>股票</th><th>入场 / 退出</th><th>股数 / 费用</th><th>扣费变化</th><th>退出原因</th></tr></thead><tbody>${(data.trades || []).map((t) => `<tr><td>${esc(t.name)}<small>${esc(t.code)} · ${esc(t.strategy)}</small></td><td>${dateLabel(t.entry_day)} / ${dateLabel(t.exit_day)}<small>${num(t.entry_price)} / ${num(t.exit_price)}</small></td><td>${t.shares} / ${num(t.fees)}元</td><td>${pct(t.net_return)}</td><td>${esc(t.exit_reason)}</td></tr>`).join("") || emptyRow("暂无已完成交易；查看上方跳过原因或继续积累行情",5)}</tbody></table></div></details><details class="panel research-panel"><summary>当前模拟持仓 · ${positions.length}只</summary>${positions.map((p) => `<p class="research-body">${esc(p.name)} ${esc(p.code)} · ${p.shares}股 · 入场 ${dateLabel(p.entry_day)} · 最近估值 ${num(p.mark)}元${p.quote_time ? ` · 行情 ${timeLabel(p.quote_time)}` : ""}${p.exit_due ? ` · ${esc(p.exit_due)}` : ""}</p>`).join("")}</details>`;
 }
 function openPlan(code) {
   const watch = state.watchlist.find((w) => w.code === code), plan = watch?.plan || {}, form = $("plan-form");
@@ -341,27 +343,67 @@ if (OFFLINE?.portfolio && OFFLINE.public && !OFFLINE.live_url && /^https?:$/.tes
 }
 
 let publicPortfolioPending = false;
+function updatePublicSync(status,text) {
+  publicSyncState = {status,text};
+  const notice = $("portfolio-sync-status");
+  if (notice) { notice.querySelector("span").textContent = text; notice.className = `notice${status === "failed" ? " error" : ""}`; }
+}
+function publicQuoteExpired(data) {
+  const v = data?.backtest?.valuation;
+  if (!v || !["available","stale"].includes(v.status)) return false;
+  const parts = Object.fromEntries(new Intl.DateTimeFormat("sv-SE",{timeZone:"Asia/Shanghai",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false}).formatToParts(new Date()).map((p) => [p.type,p.value]));
+  const today = `${parts.year}${parts.month}${parts.day}`, clock = `${parts.hour}:${parts.minute}`;
+  const cutoff = clock > "15:00" ? "15:00" : clock > "11:30" && clock < "13:00" ? "11:30" : clock;
+  const expectedAt = Date.parse(`${parts.year}-${parts.month}-${parts.day}T${cutoff}:00+08:00`);
+  return v.status === "stale" || today !== v.day || expectedAt - Date.parse(v.quote_start) > (v.interval_minutes + 5) * 60000;
+}
+async function fetchPublicPortfolio(url, backup = false) {
+  const controller = new AbortController(), timeout = setTimeout(() => controller.abort(),6000);
+  try {
+    url.searchParams.set("t",String(Date.now()));
+    const response = await fetch(url,{cache:"no-store",credentials:"omit",signal:controller.signal,
+      headers:backup ? {Accept:"application/vnd.github.raw+json"} : {}});
+    if (!response.ok) throw new Error("同步未成功");
+    const data = await response.json();
+    if (data.version !== "portfolio-live-v1" || data.source !== OFFLINE.dashboard.source || !data.backtest?.summary || !Number.isFinite(Date.parse(data.data_at))) throw new Error("数据格式无效");
+    return data;
+  } finally { clearTimeout(timeout); }
+}
 async function refreshPublicPortfolio() {
-  if (!OFFLINE?.live_url || !OFFLINE.public || !OFFLINE.portfolio || !/^https?:$/.test(location.protocol) || publicPortfolioPending) return;
+  if (!OFFLINE?.public || !OFFLINE.portfolio || !/^https?:$/.test(location.protocol) || publicPortfolioPending) return;
+  if (!OFFLINE.live_url) { updatePublicSync("failed","此页面尚未启用实时读取，请打开最新持仓入口。"); return; }
   publicPortfolioPending = true;
-  const controller = new AbortController(), timeout = setTimeout(() => controller.abort(),15000);
+  updatePublicSync("pending","正在同步最新持仓…");
   try {
     const url = new URL(OFFLINE.live_url);
-    url.searchParams.set("t",String(Date.now()));
-    const response = await fetch(url,{cache:"no-store",credentials:"omit",signal:controller.signal});
-    if (!response.ok) throw new Error("最新持仓同步暂不可用，保留当前估值；请查看行情时间。");
-    const data = await response.json();
-    if (data.version !== "portfolio-live-v1" || data.source !== OFFLINE.dashboard.source || !data.backtest?.summary || !Number.isFinite(Date.parse(data.data_at))) throw new Error("公开持仓数据格式无效，保留当前估值。");
+    let data, backup = false;
+    try { data = await fetchPublicPortfolio(new URL(url)); } catch (_) {}
     const previousAt = OFFLINE.backtest?.valuation?.captured_at;
+    const oldResponse = data && previousAt && Date.parse(data.data_at) < Date.parse(previousAt);
+    if ((!data || oldResponse || publicQuoteExpired(data)) && Date.now() - lastPublicApiAttempt >= 120000) {
+      const parts = url.pathname.split("/").filter(Boolean);
+      if (url.hostname === "raw.githubusercontent.com" && parts.length === 4) {
+        lastPublicApiAttempt = Date.now();
+        const apiUrl = new URL(`https://api.github.com/repos/${parts[0]}/${parts[1]}/contents/${parts[3]}`);
+        apiUrl.searchParams.set("ref",parts[2]);
+        try { data = await fetchPublicPortfolio(apiUrl,true); backup = true; } catch (_) {}
+      }
+    }
+    if (!data) throw new Error("实时同步未成功，当前显示保存的估值；可点击重新同步或打开最新持仓。");
     if (previousAt && Date.parse(data.data_at) < Date.parse(previousAt)) {
-      message(`当前文件行情 ${timeLabel(previousAt)} 较新，保留当前估值；轻量数据正在同步。`);
+      updatePublicSync("failed",`最新读取仍落后于当前文件，保留 ${timeLabel(previousAt)} 的估值，稍后重试。`);
       return;
     }
     OFFLINE.backtest = data.backtest;
+    updatePublicSync(publicQuoteExpired(data) ? "failed" : "success",`${publicQuoteExpired(data) ? "行情仍过期，保留保存的估值" : "已同步"} · 行情 ${timeLabel(data.data_at)} · 检查 ${timeLabel(new Date().toISOString())}${backup ? " · 备用通道" : ""}`);
     if (currentView === "backtest") renderBacktest(data.backtest);
     message(`行情采集 ${timeLabel(data.data_at)} · 公开同步 ${timeLabel(data.published_at)} · 页面每分钟检查更新。`);
-  } catch (error) { message(error.message,true); }
-  finally { clearTimeout(timeout); publicPortfolioPending = false; }
+  } catch (error) { updatePublicSync("failed",error.message); message(error.message,true); }
+  finally { publicPortfolioPending = false; }
 }
+$("backtest-output").addEventListener("click",(e) => {if (e.target.closest('[data-action="retry-live"]')) refreshPublicPortfolio();});
 setInterval(() => { if (!document.hidden) refreshPublicPortfolio(); },60000);
 document.addEventListener("visibilitychange",() => { if (!document.hidden) refreshPublicPortfolio(); });
+
+window.addEventListener("pageshow",() => { if (!document.hidden) refreshPublicPortfolio(); });
+window.addEventListener("focus",() => { if (!document.hidden) refreshPublicPortfolio(); });

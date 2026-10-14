@@ -127,6 +127,7 @@ def test_phone_reads_new_live_values_without_reloading_report(browser, populated
         page.clock.install(time=datetime.fromisoformat('2026-10-14T11:25:00+08:00'))
         page.route('https://reports.example/**', lambda route: route.fulfill(content_type='text/html',body=html))
         page.route('https://raw.githubusercontent.com/**', lambda route: route.fulfill(json=live))
+        page.route('https://api.github.com/**', lambda route: route.fulfill(status=503))
         page.goto('https://reports.example/reports/portfolio.html')
         page.wait_for_function('document.querySelector("[data-account-field=profit] .metric-value")?.textContent.includes("1000.00")')
         assert '公开同步' in page.locator('#message').inner_text()
@@ -140,7 +141,69 @@ def test_phone_reads_new_live_values_without_reloading_report(browser, populated
         page.unroute('https://raw.githubusercontent.com/**')
         page.route('https://raw.githubusercontent.com/**', lambda route: route.fulfill(status=503))
         page.evaluate('refreshPublicPortfolio()')
-        assert '暂不可用' in page.locator('#message').inner_text()
+        assert '同步未成功' in page.locator('#message').inner_text()
+        assert '同步未成功' in page.locator('#portfolio-sync-status').inner_text()
         assert '+2000.00' in page.locator('[data-account-field=profit] .metric-value').inner_text()
         assert not page.evaluate('document.documentElement.scrollWidth > innerWidth')
         assert not errors
+
+
+@pytest.mark.parametrize('primary', ['failed', 'stale'])
+def test_phone_falls_back_to_api_and_refreshes_on_return(browser, populated, primary):
+    from copy import deepcopy
+    from datetime import datetime
+
+    from stock_daily.html_export import daily_payload, render_daily
+
+    db, settings, _ = populated
+    settings = replace(settings, pages_repository='example/reports')
+    payload = daily_payload(db, settings, public=True, portfolio=True)
+    live = public_portfolio(db, settings)
+    live.update(data_at='2026-10-14T13:50:00+08:00', published_at='2026-10-14T13:50:03+08:00')
+    live['backtest']['valuation'] = {'status':'available', 'interval_minutes':10, 'day':'20261014',
+        'captured_at':live['data_at'], 'quote_start':live['data_at'], 'quote_end':live['data_at'],
+        'basis_day':'20261009', 'message':'已确认持仓的盘中估值', 'positions':[],
+        'summary':{**live['backtest']['summary'], 'initial_capital':100000, 'market_value':0,
+                   'available_cash':101000, 'equity':101000, 'profit':1000, 'return':1, 'through':'20261014'}}
+    stale = deepcopy(live)
+    stale.update(data_at='2026-10-14T11:30:00+08:00')
+    stale['backtest']['valuation'].update(captured_at=stale['data_at'], quote_start=stale['data_at'],
+                                         quote_end=stale['data_at'])
+    calls = []
+    with browser.new_context(viewport={'width':390,'height':844}) as context:
+        page = context.new_page()
+        page.clock.install(time=datetime.fromisoformat('2026-10-14T13:55:00+08:00'))
+        page.route('https://reports.example/**', lambda r:r.fulfill(content_type='text/html',body=render_daily(payload,settings)))
+        page.route('https://raw.githubusercontent.com/**', lambda r:r.fulfill(status=503) if primary=='failed' else r.fulfill(json=stale))
+        def backup(route):
+            calls.append(route.request.headers)
+            route.fulfill(json=live)
+        page.route('https://api.github.com/**',backup)
+        page.goto('https://reports.example/reports/portfolio.html')
+        page.locator('#portfolio-sync-status').filter(has_text='备用通道').wait_for()
+        assert '13:50' in page.locator('#portfolio-sync-status').inner_text()
+        assert '+1000.00' in page.locator('[data-account-field=profit] .metric-value').inner_text()
+        assert calls[0]['accept'] == 'application/vnd.github.raw+json'
+        live['backtest']['valuation']['summary'].update(profit=2000,equity=102000,available_cash=102000)
+        live['data_at']='2026-10-14T13:51:00+08:00'
+        page.evaluate('lastPublicApiAttempt=0;window.dispatchEvent(new Event("pageshow"))')
+        page.locator('[data-account-field=profit] .metric-value').filter(has_text='+2000.00').wait_for()
+        assert len(calls) == 2
+        page.evaluate('refreshPublicPortfolio()')
+        assert len(calls) == 2  # Automatic fallback requests are bounded, not repeated every poll.
+
+
+def test_deployment_keeps_old_portfolio_link_usable(populated, tmp_path):
+    db,settings,_ = populated
+    folder=tmp_path/'site'
+    export_pages(db,settings,folder,render_image=fake_png)
+    manifest=json.loads((folder/'manifest.json').read_text())
+    manifest['reports'].append({**manifest['reports'][0],'day':'20261014','slot':'midday'})
+    (folder/'manifest.json').write_text(json.dumps(manifest))
+    spec=importlib.util.spec_from_file_location('refresh_ui','.github/scripts/refresh_public_ui.py')
+    module=importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    module.refresh(folder,'example/reports',Path('stock_daily').resolve())
+    alias=folder/'reports/demo-20261014-portfolio.html'
+    assert 'url=../portfolio.html' in alias.read_text()
+    assert 'reports/demo-20261014-portfolio.html' in json.loads((folder/'manifest.json').read_text())['files']

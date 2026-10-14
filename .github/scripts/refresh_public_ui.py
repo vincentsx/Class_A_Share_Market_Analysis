@@ -39,11 +39,25 @@ def refresh(folder, repository, assets):
                                 lambda m: m[1] + javascript + m[2], content, count=1, flags=re.S)
         if count != 1:
             raise ValueError('Missing public report script')
-        content = content.replace("connect-src 'none'", 'connect-src https://raw.githubusercontent.com')
+        content = re.sub(r'connect-src [^;]+', 'connect-src https://raw.githubusercontent.com https://api.github.com', content)
         content = content.replace('在线展示页每10分钟重载，部署完成后可看到更新。',
                                   '在线持仓每分钟检查轻量数据，行情每10分钟采集。')
         path.write_text(content)
         manifest['files'][portfolio['html']] = hashlib.sha256(path.read_bytes()).hexdigest()
+        source = payload['dashboard']['source']
+        days = {r['day'] for r in records}
+        quote_day = payload.get('backtest', {}).get('valuation', {}).get('day')
+        if quote_day and re.fullmatch(r'\d{8}', quote_day):
+            days.add(quote_day)
+        for day in days:
+            alias = f'reports/{source}-{day}-portfolio.html'
+            alias_path = folder / alias
+            if not alias_path.exists():
+                alias_path.write_text('<!doctype html><html lang="zh-CN"><meta charset="utf-8">'
+                                     '<meta http-equiv="refresh" content="0;url=../portfolio.html">'
+                                     '<title>最新模拟持仓</title><a href="../portfolio.html">打开最新模拟持仓</a></html>')
+                manifest['files'][alias] = hashlib.sha256(alias_path.read_bytes()).hexdigest()
+
     slots = {slot: next((r for r in records if r['slot'] == slot), None)
              for slot in ['portfolio', 'midday', 'close', 'evening']}
     env = Environment(loader=FileSystemLoader(assets / 'templates'), autoescape=select_autoescape(['html']))
