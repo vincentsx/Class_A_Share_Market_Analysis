@@ -11,7 +11,7 @@ from pydantic import BaseModel, Field
 from sqlalchemy import delete, select, text
 
 from .config import Settings
-from .db import Database, bars, watchlist
+from .db import Database, bars, watch_evaluations, watch_plans, watchlist
 from .service import dashboard, tracking
 
 ROOT = Path(__file__).parent
@@ -32,7 +32,7 @@ def create_app(settings=None, database=None):
         yield
         database.engine.dispose()
 
-    app = FastAPI(title="Stock Daily · A股盘后分析", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="Stock Daily · A股盘后分析", version="0.2.0", lifespan=lifespan)
     app.state.settings, app.state.db = settings, database
     app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
     templates = Jinja2Templates(directory=ROOT / "templates")
@@ -88,8 +88,41 @@ def create_app(settings=None, database=None):
         return dashboard(database, settings, day)
 
     @app.get("/api/tracking")
-    def get_tracking():
-        return tracking(database, settings)
+    def get_tracking(day: str | None = Query(default=None, pattern=r"^\d{8}$")):
+        return tracking(database, settings, as_of=day)
+
+    @app.get("/api/operations")
+    def operations():
+        from .operations import health_view
+
+        return health_view(database, settings)
+
+    @app.get("/api/backtest")
+    def backtest(day: str | None = Query(default=None, pattern=r"^\d{8}$"),
+                 strategy: str = "all", cohort: str = "all", rule_version: str = "",
+                 capital: float = 100000, weight: float = .1, max_positions: int = 10,
+                 holding_days: int = 10, commission_bps: float = 3, min_commission: float = 5,
+                 sell_tax_bps: float = 5, transfer_bps: float = .1, slippage_bps: float = 5,
+                 participation: float = .01, split_day: str = ""):
+        from .backtest import Simulation, simulate
+
+        try:
+            config = Simulation(capital, weight, max_positions, holding_days, commission_bps, min_commission,
+                                sell_tax_bps, transfer_bps, slippage_bps, participation, strategy,
+                                rule_version, cohort, split_day)
+            return simulate(database, settings, day, config)
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from None
+
+    @app.post("/api/evidence/{day}/summary", dependencies=[Depends(authorize)])
+    def evidence_summary(day: str):
+        from .evidence_ai import summarize_evidence
+
+        get_report(day)
+        try:
+            return summarize_evidence(database, settings, dashboard(database, settings, day)["report"])
+        except ValueError as error:
+            raise HTTPException(422, str(error)) from None
 
     @app.get("/api/report/{day}")
     def get_report(day: str):
@@ -144,6 +177,29 @@ def create_app(settings=None, database=None):
             raise HTTPException(422, str(error)) from None
         with database.engine.begin() as connection:
             connection.execute(delete(watchlist).where(watchlist.c.code == code))
+            connection.execute(delete(watch_plans).where(watch_plans.c.code == code))
+            connection.execute(delete(watch_evaluations).where(watch_evaluations.c.code == code))
         return {"status": "deleted"}
+
+    class PlanInput(BaseModel):
+        reason: str = Field(default="", max_length=1000)
+        question: str = Field(default="", max_length=1000)
+        target: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+        invalidation: float | None = Field(default=None, gt=0, allow_inf_nan=False)
+        checks: list[str] = Field(default=["below_ma20", "down5", "volume_down"], max_length=5)
+
+    @app.put("/api/watchlist/{code}/plan", dependencies=[Depends(authorize)])
+    def update_plan(code: str, value: PlanInput):
+        from .observations import CHECKS, save_plan
+
+        if not database.rows(select(watchlist.c.code).where(watchlist.c.code == code)):
+            raise HTTPException(404, "请先添加到自选股")
+        if any(c not in CHECKS for c in value.checks) or len(set(value.checks)) != len(value.checks):
+            raise HTTPException(422, "提醒条件无效或重复")
+        if "above_target" in value.checks and value.target is None or (
+                "below_invalidation" in value.checks and value.invalidation is None):
+            raise HTTPException(422, "价格提醒需要对应的观察价或失效价")
+        save_plan(database, code, value.model_dump())
+        return {"status": "saved", "code": code}
 
     return app

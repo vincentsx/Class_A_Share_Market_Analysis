@@ -2,6 +2,57 @@
 
 本地优先的股票研究工具，面向持有几天至几周的 A 股观察。每天采集行情、检查数据、分析市场和行业、筛选可解释的观察信号，并记录后续表现。
 
+## 研究工作台的新功能
+
+- **完整信号存档**：`MAX_CANDIDATES`只控制优先展示数量；所有规则命中都写入报告与信号表。页面可切换完整名单，搜索会检索全部已存候选。旧版遗漏可按冻结指标严格核对后重建；重建候选单独标记、单独统计，并从模拟成交中排除，不冒充当时已经发布的信号。
+- **每日变化清单**：只对比上一交易日的已发布报告，区分新增、持续满足、不再入选、触发原失效条件与无法判定。缺少前日报告不推断变化；旧版截断名单的比较标为“较已存名单新增”。晚间汇总当天真实保存的午间与收盘观察。
+- **自选观察计划**：记录关注理由、待验证事项、观察价和失效价；可选择均线、明显下跌、放量下跌和价格条件。计划生效后的日线建立基线，之后只突出新触发或解除的条件；重复状态不生成新的变化提醒。修改晚于历史报告的计划不回填该报告。状态提醒随报告阅读，不另行发送消息。
+- **规则效果看板**：按策略、版本分别展示5/10/20交易日均值、中位数、25%/75%分位、分布、失效占比和同期沪深300超额变化。支持全部已存命中、优先展示与同股票/策略/版本20交易日冷却样本；冷却样本仍可能相关。少于30条完整观察标记样本不足。统计最近最多10000条，明细展示200条，展示统计截止日期与缺失数。
+- **运行健康**：worker独立心跳在长任务期间持续更新，90秒未更新标记过期；展示采集、导出、邮件、公开网站阶段与备份状态。保存日历不足时，下一时段显示为“检查时间，交易日历待核验”。新版worker使用进程锁，避免同数据库重复启动。
+- **事件证据**：展示原始公告或留存快讯、发布时间、首次收录、出处和待核实事项。价格观察从首次发现之后的收盘建立基线，再比较后续1/5交易日；缺数据或观察期不足留空，不推断新闻导致涨跌。报告固定证据截止时点，普通重导出不添加后来才发现的消息。
+- **模拟成交研究**：与收盘观察统计分开。展示初始资金、当前持仓市值、可用资金和盈亏金额；总资产=持仓市值+可用资金，盈亏金额=总资产−初始资金，已计入发生的费用。金额按实际计算截止日估值，不使用收益率显示值倒算。下一交易日开盘入场，失效或持有期届满后的下一开盘退出，买入后最早下一交易日卖出。支持资金、权重、持仓上限、持有期、费用、滑点和以前一日成交量为基准的参与上限；同股票持仓期间合并重叠信号。事后生成或缺少发布时间的信号排除，开盘接近涨跌停保守不成交，退出受限时延期。持仓无行情且未确认停牌，或发生缺少分红送转细节的复权变化时停止净值计算，明确显示实际计算截止日。
+
+本地页面默认每30秒刷新并跟随最新报告；选择某个日期后固定在该日，信号跟踪与模拟均截止该日。导出的HTML内嵌默认参数模拟结果，离线文件不能重新模拟或调用模型；邮件附件禁用脚本时也能阅读变化清单、策略统计、计划、证据和模拟概览。
+
+### 自动备份与健康检查
+
+```dotenv
+BACKUP_ENABLED=true
+BACKUP_DIR=./data/backups
+BACKUP_RETAIN_DAYS=7
+```
+
+worker每天首次检查成功生成一份备份，每15分钟检查失败重试，默认保留7天。SQLite使用一致性备份API并校验完整性；PostgreSQL使用`pg_dump --format=custom`，运行环境需安装与服务端兼容的客户端。备份文件仅当前系统账号可读，包含个人自选与邮件记录，不进入公开网站。备份仍在本机，异机备份需另行配置。新增数据表在启动时创建，现有行情、报告与信号保留。
+
+```bash
+.venv/bin/python -m stock_daily health
+.venv/bin/python -m stock_daily backup
+# 先自动备份，再核对旧报告冻结指标、命中数、排序和原始依据；不联网、不发信
+.venv/bin/python -m stock_daily repair-archive
+.venv/bin/python -m stock_daily backtest --strategy breakout --holding-days 10 --date 20261012
+# 可选前后段对比；分界日期必须在模拟日期范围内
+.venv/bin/python -m stock_daily backtest --split-day 20261009
+```
+
+`repair-archive`仅处理匹配`swing-v1.0`且确实截断的旧报告。原始行情、优先候选与已发布信号依据保持不变，补充候选记录重建时间并单独列组。冻结指标、命中总数、排序或原始依据不一致时拒绝重建；不会使用后来行情重算历史指标。旧版未保存的成交额门槛按原v1默认5000万元尝试，所有核对均通过才写入。
+
+模拟界面可修改费用，单位“基点”为0.01%；默认值仅为研究假设，不代表券商报价或历史统一费率。支持2023-04-10之后普通沪深主板、创业板与科创板规则候选，排除风险标记和不支持板块；科创板保守按200股整数申报，其余按100股。参考[上交所交易规则](https://www.sse.com.cn/lawandrules/sselawsrules2025/stocks/exchange/c/c_20260424_10816482.shtml)与[深交所创业板涨跌幅说明](https://www.szse.cn/www/investor/index/update/t20200729_580056.html)。日线无法验证撮合、队列与冲击成本，历史行业/名称/风险状态及行情修订也不完全具有时点性；该模拟不能当作无偏策略验证。前后段对比不是预先留出的样本外检验，不自动调参。
+
+### 可选AI证据摘要
+
+```dotenv
+AI_API_KEY=
+AI_API_BASE_URL=https://api.openai.com/v1
+AI_API_STYLE=responses
+AI_MODEL=
+```
+
+配置账号可用的模型，重启服务后，通过网页“生成AI摘要”或`.venv/bin/python -m stock_daily evidence-summary --date YYYYMMDD`手动调用。网页调用需要管理密钥。官方Responses使用结构化输出和`store=false`；兼容服务使用`AI_API_STYLE=chat_completions`，将JSON模式输出交给本地严格校验。`AI_API_BASE_URL`填写HTTPS接口根地址，通常以`/v1`结尾。旧版`OPENAI_API_KEY`仍兼容，`AI_API_KEY`非空时优先使用新配置。
+
+例如本地配置的第三方服务可使用`AI_API_BASE_URL=https://aiapi.suunto.cn/v1`、`AI_API_STYLE=chat_completions`、`AI_MODEL=deepseek-v4-pro`，密钥仅保存在`.env`。每次最多发送20条已留存公开证据，不发送自选备注、观察计划或邮箱配置。相同证据、接口地址、接口格式、模型和提示版本复用本地缓存，引用ID不在输入证据中或输出截断时拒绝保存。AI转述仍需核对原文，引用存在不等于结论已独立核实；传闻不自动升级为已证实事实。不配置模型仍可阅读所有证据。官方接口实现参考[OpenAI结构化输出文档](https://developers.openai.com/api/docs/guides/structured-outputs?api-mode=responses)。
+
+本机当前网页和worker由用户级临时服务`stock-daily-web`、`stock-daily-worker`运行。修改`.env`后可执行`systemctl --user restart stock-daily-web stock-daily-worker`让配置生效；运行时直接打开网页，避免重复启动脚本。临时服务不会设置开机启动，重启电脑后仍按下面的“本地启动”操作。
+
 ## 本地启动
 
 需要 Python 3.11+（推荐3.12，AKShare要求3.11以上）。Ubuntu 缺少 venv 时先安装对应版本的 `python3-venv`。只有旧版Python时可先执行 `uv python install 3.12` 和 `uv venv --seed --python 3.12 .venv`。
@@ -371,7 +422,7 @@ Tushare官方权限表列出的基础非复权日线门槛为120积分，100积�
 
 价格分析采用原始价格×复权因子，展示时换回当前价格尺度；原始价格、成交量（股）、成交额（元）与复权因子单独保存。财务PE/PB可存储展示，本版本不使用财报因子选股。
 
-**跟踪是收盘到收盘的观察，不是策略回测。** 尚未实现可成交的次日开盘入场、佣金、滑点、涨跌停、交易制度约束、仓位、组合最大回撤或样本外策略检验。停牌或某日缺数据时该观察区间标记缺失，不按“下一条可用行情”凑足交易日。重叠信号不是独立样本；仅统计最近最多200个已保存信号。
+**跟踪是收盘到收盘的观察，不是策略回测。** 停牌或某日缺数据时该观察区间标记缺失，不按“下一条可用行情”凑足交易日。重叠信号不是独立样本；统计最近最多10000个已保存信号，明细展示前200条。模拟成交、费用和组合回撤在独立“模拟回测”入口查看，其限制见前文。
 
 股票基础信息包含当前可取得的上市、退市和暂停上市股票，但历史行业分类、名称和风险警示状态并非完整的时点历史。手工生成过去日期报告会使用采集时的基础信息，不能作为无前视偏差的历史策略回测。原始行情历史修订目前需人工复核和重算。
 
@@ -394,7 +445,7 @@ worker 使用 `Asia/Shanghai`，默认11:35午间快照、15:05收盘快照、20
 .venv/bin/python -m stock_daily track
 ```
 
-只读 API：`/health`、`/api/dashboard?day=YYYYMMDD`、`/api/report/{day}`、`/api/report/{day}/download`、`/api/stocks/{code}/history?day=YYYYMMDD`、`/api/tracking`、`/api/watchlist`。自选股 POST/DELETE 要求 `Authorization: Bearer APP_API_KEY`。网页不存储管理密钥。
+只读 API：`/health`、`/api/dashboard?day=YYYYMMDD`、`/api/report/{day}`、`/api/report/{day}/download`、`/api/stocks/{code}/history?day=YYYYMMDD`、`/api/tracking?day=YYYYMMDD`、`/api/watchlist`、`/api/operations`、`/api/backtest?day=YYYYMMDD`。自选股 POST/DELETE、观察计划 PUT `/api/watchlist/{code}/plan`、AI摘要 POST `/api/evidence/{day}/summary`要求 `Authorization: Bearer APP_API_KEY`。网页不存储管理密钥。
 
 ## GitHub Pages：固定公网报告链接
 

@@ -4,7 +4,7 @@ ENV PLAYWRIGHT_BROWSERS_PATH=/opt/playwright
 WORKDIR /app
 COPY requirements.txt ./
 RUN pip install --no-cache-dir -r requirements.txt
-RUN python -m playwright install --with-deps chromium && apt-get update && apt-get install -y --no-install-recommends fonts-noto-cjk && rm -rf /var/lib/apt/lists/*
+RUN python -m playwright install --with-deps chromium && apt-get update && apt-get install -y --no-install-recommends fonts-noto-cjk postgresql-client && rm -rf /var/lib/apt/lists/*
 COPY pyproject.toml ./
 COPY stock_daily ./stock_daily
 RUN useradd --create-home --uid 10001 researcher && mkdir /app/data && chown researcher:researcher /app/data

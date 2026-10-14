@@ -8,7 +8,7 @@ from sqlalchemy import delete, select, update
 
 from .analysis import build_report
 from .config import now
-from .db import BusyError, bars, reports, runs, sessions, signals, trading_days
+from .db import BusyError, bars, reports, runs, sessions, signals, trading_days, watchlist
 from .providers import DataError, make_provider, parse_day
 
 logger = logging.getLogger(__name__)
@@ -20,11 +20,16 @@ def publish_html(db, settings, day, identifier):
     try:
         from .html_export import export_published
 
-        return export_published(db, settings, day)
+        export_id = db.start_run(settings.source, day, "export")
+        result = export_published(db, settings, day)
+        db.finish_run(export_id, "success", "HTML/PNG已按配置导出")
+        return result
     except Exception:
         # The validated DB report is already published; a filesystem error must
         # not relabel it as a failed data acquisition or replace a previous HTML.
         logger.exception("报告已保存，但离线HTML/PNG导出失败")
+        if 'export_id' in locals():
+            db.finish_run(export_id, "failed", "HTML/PNG导出未完成，已保存行情保留")
         db.finish_run(identifier, "success", "报告已保存；HTML导出失败或PNG导出失败，请运行 export-html / export-png 重试")
         return {"status": "failed", "message": "报告已保存，HTML/PNG导出失败"}
 
@@ -208,26 +213,37 @@ def run_daily(db, settings, day=None, force=False, provider=None):
             )
             report["generated_at"] = now().isoformat()
             report["acquired_at"] = today["acquired_at"]
+            from .observations import plan_views
+            from .research import changes, evidence, record_announcements
+
+            report["changes"] = changes(db, settings, report, today_rows)
+            report["evidence"] = evidence(db, settings, report, today_rows)
+            watched = db.rows(select(watchlist))
             if getattr(active_provider, "data_notes", None):
                 report["data_notes"] = active_provider.data_notes
             with db.engine.begin() as connection:
                 # Publish today's raw data, metadata, report and signals atomically.
                 save_session(db, connection, source, today, today_rows)
+                record_announcements(db, connection, source, today["events"], today["acquired_at"])
                 db.upsert(connection, reports, {"source": source, "day": day, "payload": report})
                 # Keep report and signal snapshot in the same transaction, including forced reruns.
                 connection.execute(delete(signals).where(signals.c.source == source, signals.c.day == day))
-                for candidate in report["candidates"]:
+                for candidate in report["all_candidates"]:
                     connection.execute(
                         signals.insert().values(
                             source=source,
                             day=day,
                             code=candidate["code"],
                             strategy=candidate["strategy"],
-                            payload=candidate,
+                            payload={**candidate, "published_at": report["generated_at"],
+                                     "priority": candidate in report["candidates"]},
                         )
                     )
-            db.finish_run(identifier, "success", f"报告已生成，{len(report['candidates'])} 个观察信号")
-            result = {"status": "success", "day": day, "candidates": len(report["candidates"])}
+                plan_views(db, settings, report, watched, persist=True, connection=connection)
+            db.finish_run(identifier, "success", f"报告已生成，完整存档{len(report['all_candidates'])}个信号；"
+                          f"优先展示{len(report['candidates'])}个")
+            result = {"status": "success", "day": day, "candidates": len(report["candidates"]),
+                      "all_candidates": len(report["all_candidates"])}
             html = publish_html(db, settings, day, identifier)
             if html:
                 result["html"] = html
@@ -276,6 +292,9 @@ def refresh_events(db, settings, day=None, provider=None):
             if status == "unavailable":
                 raise DataError("公告接口不可用，已保留原有公告数据")
             with db.engine.begin() as connection:
+                from .research import record_announcements
+
+                record_announcements(db, connection, settings.source, events, now().isoformat())
                 connection.execute(
                     update(sessions)
                     .where(sessions.c.source == settings.source, sessions.c.day == day)

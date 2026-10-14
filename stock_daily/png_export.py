@@ -30,7 +30,7 @@ def export_png(html_path, output=None):
                 page.route("http://**/*", lambda route: route.abort())
                 page.route("https://**/*", lambda route: route.abort())
                 page.goto(html.as_uri(), wait_until="load")
-                page.wait_for_function("window.REPORT_READY === true", timeout=30000)
+                page.wait_for_function("() => window.REPORT_READY === true", timeout=30000)
                 # A bitmap cannot switch tabs or open collapsed sections later.
                 # Let the report expose its dedicated, fully visible export view.
                 try:

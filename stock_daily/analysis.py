@@ -56,45 +56,8 @@ def tag_events(events):
     return [{**e, "tags": [word for word in EVENT_WORDS if word in e["title"]]} for e in events]
 
 
-def build_report(settings, day, histories, day_sessions, universe, quality, events, event_status):
-    dates = sorted(day_sessions)
-    if len(dates) < 65:
-        raise ValueError("至少需要65个完整采集的交易日")
-    benchmark = day_sessions[day]["benchmark"]
-    benchmark20 = (benchmark["close"] / day_sessions[dates[-21]]["benchmark"]["close"] - 1) * 100
-    expected_recent = dates[-65:]
-    metrics = []
-    today = [h[-1] for h in histories.values() if h and h[-1]["day"] == day]
-    for code, history in histories.items():
-        # Suspension/missing data must not silently change the meaning of a trading-day window.
-        if [r["day"] for r in history[-65:]] != expected_recent:
-            continue
-        metric = calculate_metrics(history, benchmark20)
-        stock = universe.get(code)
-        if metric is not None and stock:
-            metrics.append({**metric, **stock})
-    sectors = defaultdict(list)
-    for metric in metrics:
-        if metric["industry"] != "未分类":
-            sectors[metric["industry"]].append(metric)
-    industries = sorted(
-        [
-            {
-                "name": name,
-                "count": len(group),
-                "return5": mean(m["return5"] for m in group),
-                "return20": mean(m["return20"] for m in group),
-                "relative20": mean(m["relative20"] for m in group),
-                "up_ratio": sum(m["pct"] > 0 for m in group) / len(group) * 100,
-                "amount": sum(m["amount"] for m in group),
-            }
-            for name, group in sectors.items()
-        ],
-        key=lambda row: row["relative20"],
-        reverse=True,
-    )
+def screen_candidates(settings, metrics, industries, tagged, event_status, adjustments):
     strong = {s["name"] for s in industries[: max(1, len(industries) // 3)] if s["relative20"] > 0}
-    tagged = tag_events(events)
     by_code = defaultdict(list)
     for e in tagged:
         by_code[e["code"]].append(e)
@@ -133,7 +96,7 @@ def build_report(settings, day, histories, day_sessions, universe, quality, even
                     "label": label,
                     "rule_version": RULE_VERSION,
                     "invalidation": invalidation,
-                    "invalidation_adj": invalidation * histories[metric["code"]][-1]["adj"],
+                    "invalidation_adj": invalidation * adjustments[metric["code"]],
                     "observation": "观察未来5～10个交易日的延续性",
                     "reasons": [
                         f"行业位于相对强度前列（{metric['industry']}）",
@@ -146,6 +109,49 @@ def build_report(settings, day, histories, day_sessions, universe, quality, even
                 }
             )
     candidates.sort(key=lambda m: (m["relative20"], m["amount"]), reverse=True)
+    return candidates
+
+
+def build_report(settings, day, histories, day_sessions, universe, quality, events, event_status):
+    dates = sorted(day_sessions)
+    if len(dates) < 65:
+        raise ValueError("至少需要65个完整采集的交易日")
+    benchmark = day_sessions[day]["benchmark"]
+    benchmark20 = (benchmark["close"] / day_sessions[dates[-21]]["benchmark"]["close"] - 1) * 100
+    expected_recent = dates[-65:]
+    metrics = []
+    today = [h[-1] for h in histories.values() if h and h[-1]["day"] == day]
+    for code, history in histories.items():
+        # Suspension/missing data must not silently change the meaning of a trading-day window.
+        if [r["day"] for r in history[-65:]] != expected_recent:
+            continue
+        metric = calculate_metrics(history, benchmark20)
+        stock = universe.get(code)
+        if metric is not None and stock:
+            metrics.append({**metric, **stock})
+    sectors = defaultdict(list)
+    for metric in metrics:
+        if metric["industry"] != "未分类":
+            sectors[metric["industry"]].append(metric)
+    industries = sorted(
+        [
+            {
+                "name": name,
+                "count": len(group),
+                "return5": mean(m["return5"] for m in group),
+                "return20": mean(m["return20"] for m in group),
+                "relative20": mean(m["relative20"] for m in group),
+                "up_ratio": sum(m["pct"] > 0 for m in group) / len(group) * 100,
+                "amount": sum(m["amount"] for m in group),
+            }
+            for name, group in sectors.items()
+        ],
+        key=lambda row: row["relative20"],
+        reverse=True,
+    )
+    tagged = tag_events(events)
+    candidates = screen_candidates(settings, metrics, industries, tagged, event_status,
+                                   {code: rows[-1]["adj"] for code, rows in histories.items() if rows})
     # Market amount comparison uses the complete session totals, not only eligible candidates.
     totals = [sum(r["amount"] for r in histories_rows(histories, d)) for d in dates[-21:]]
     previous_total = mean(totals[:-1]) if len(totals) > 1 else 0
@@ -175,7 +181,10 @@ def build_report(settings, day, histories, day_sessions, universe, quality, even
         },
         "industries": industries,
         "candidates": candidates[: settings.max_candidates],
+        "all_candidates": candidates,
         "all_candidate_count": len(candidates),
+        "candidate_storage": "complete",
+        "rule_parameters": {"min_amount": settings.min_amount, "display_limit": settings.max_candidates},
         "stocks": metrics,
         "events": tagged,
         "notes": [

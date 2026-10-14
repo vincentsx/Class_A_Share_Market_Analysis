@@ -1,7 +1,8 @@
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
+from urllib.parse import urlsplit
 from zoneinfo import ZoneInfo
 
 from dotenv import load_dotenv
@@ -50,6 +51,13 @@ class Settings:
     pages_enabled: bool = False
     pages_repository: str = ""
     pages_retain_days: int = 5
+    backup_enabled: bool = True
+    backup_dir: str = "./data/backups"
+    backup_retain_days: int = 7
+    ai_api_key: str = field(default="", repr=False)
+    ai_model: str = ""
+    ai_api_base_url: str = "https://api.openai.com/v1"
+    ai_api_style: str = "responses"
 
     @classmethod
     def from_env(cls):
@@ -90,6 +98,13 @@ class Settings:
             pages_enabled=os.getenv("PAGES_ENABLED", "false").lower() == "true",
             pages_repository=os.getenv("PAGES_REPOSITORY", "").strip(),
             pages_retain_days=int(os.getenv("PAGES_RETAIN_DAYS", "5")),
+            backup_enabled=os.getenv("BACKUP_ENABLED", "true").lower() == "true",
+            backup_dir=os.getenv("BACKUP_DIR", cls.backup_dir),
+            backup_retain_days=int(os.getenv("BACKUP_RETAIN_DAYS", "7")),
+            ai_api_key=os.getenv("AI_API_KEY", "") or os.getenv("OPENAI_API_KEY", ""),
+            ai_model=os.getenv("AI_MODEL", ""),
+            ai_api_base_url=os.getenv("AI_API_BASE_URL", cls.ai_api_base_url).strip().rstrip("/"),
+            ai_api_style=os.getenv("AI_API_STYLE", cls.ai_api_style).strip(),
         )
         if config.source not in {"demo", "tushare", "baostock"}:
             raise ValueError("DATA_SOURCE 必须是 demo、baostock 或 tushare")
@@ -113,6 +128,14 @@ class Settings:
             raise ValueError("SMTP_TIMEOUT需为1～60秒，MAIL_MAX_MB需为1～50")
         if not 1 <= config.pages_retain_days <= 20:
             raise ValueError("PAGES_RETAIN_DAYS需为1～20个报告日期")
+        if not 1 <= config.backup_retain_days <= 90:
+            raise ValueError("BACKUP_RETAIN_DAYS需为1～90")
+        endpoint = urlsplit(config.ai_api_base_url)
+        if (endpoint.scheme != "https" or not endpoint.hostname or endpoint.username or endpoint.password
+                or endpoint.query or endpoint.fragment):
+            raise ValueError("AI_API_BASE_URL需为不含账号、查询参数和片段的HTTPS接口地址")
+        if config.ai_api_style not in {"responses", "chat_completions"}:
+            raise ValueError("AI_API_STYLE需为responses或chat_completions")
         if config.database_url.startswith("sqlite:///./"):
             Path(config.database_url.removeprefix("sqlite:///")).parent.mkdir(parents=True, exist_ok=True)
         return config

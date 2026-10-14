@@ -117,7 +117,7 @@ def build_snapshot(db, settings, day, slot, quotes, missing, stocks, metadata_at
         .order_by(reports.c.day.desc()).limit(1))
     report = saved_reports[0]["payload"] if saved_reports else None
     watched = {r["code"] for r in db.rows(select(watchlist))}
-    reference = {r["code"] for r in report["candidates"]} if report else set()
+    reference = {r["code"] for r in report.get("all_candidates", report["candidates"])} if report else set()
     timestamps = [r["quote_time"] for r in rows]
     payload = {"day": day, "slot": slot, "label": LABELS[slot], "source": settings.source,
             "scheduled_time": settings.midday_time if slot == "midday" else settings.schedule_time,
@@ -250,7 +250,15 @@ def run_snapshot(db, settings, day=None, slot="midday", feed=None, provider=None
             with db.engine.begin() as connection:
                 db.upsert(connection, snapshots, {"source": settings.source, "day": day,
                                                   "slot": slot, "payload": payload})
-            artifacts = export_snapshot(payload, settings) if settings.export_html or settings.export_png else {}
+            artifacts = {}
+            if settings.export_html or settings.export_png:
+                export_id = db.start_run(settings.source, day, "export")
+                try:
+                    artifacts = export_snapshot(payload, settings)
+                    db.finish_run(export_id, "success", f"{LABELS[slot]}HTML/PNG已按配置导出")
+                except (Exception, KeyboardInterrupt):
+                    db.finish_run(export_id, "failed", "实时HTML/PNG导出失败，已保存报价保留")
+                    raise
             from .mailer import enqueue_safely
 
             email = enqueue_safely(db, settings, day, slot, artifacts.get('html'), artifacts.get('png'), payload)

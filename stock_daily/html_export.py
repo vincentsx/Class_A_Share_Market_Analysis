@@ -54,9 +54,11 @@ def daily_payload(db, settings, day=None, public=False):
         data["watchlist"] = []
         data["runs"] = []
         data.pop("email", None)
+        data.pop("health", None)
+        data.pop("ai_configured", None)
     histories = {}
     if report:
-        codes = {c["code"] for c in report["candidates"]}
+        codes = {c["code"] for c in report.get("all_candidates", report["candidates"])}
         for code in sorted(codes):
             rows = db.rows(
                 select(bars.c.day, bars.c.close, bars.c.adj)
@@ -67,7 +69,11 @@ def daily_payload(db, settings, day=None, public=False):
     observations = tracking(db, settings, as_of=report["day"] if report else None)
     if report:
         observations["method"] += f" 观察数据截止于 {report['day']}。"
+    from .backtest import simulate
+
+    simulation = simulate(db, settings, report["day"]) if report else None
     return {"dashboard": data, "tracking": observations, "histories": histories,
+            "backtest": simulation,
             "exported_at": now().isoformat(), "public": public}
 
 

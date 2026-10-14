@@ -1,6 +1,7 @@
 """Single worker with durable run status and bounded retries after daily cutoffs."""
 
 import logging
+import os
 import signal
 import threading
 from dataclasses import replace
@@ -77,12 +78,15 @@ def run_evening(db, settings, day):
         artifacts = None
         email = {"status": "disabled"}
         if settings.export_html or settings.export_png:
+            export_id = db.start_run(settings.source, day, "export")
             artifacts = export_published(db, settings, day)
             path = Path(artifacts["path"])
             slot_path = path.with_name(f"{settings.source}-{day}-{settings.announcement_time.replace(':', '')}.html")
             atomic_write(slot_path, path.read_text())
             if settings.export_png:
                 publish_latest_png(path.with_suffix(".png"), slot_path.with_suffix(".png"))
+            db.finish_run(export_id, "success", "晚间HTML/PNG已按配置导出")
+            export_id = None
             from .mailer import enqueue_safely
 
             email = enqueue_safely(db, settings, day, "evening", slot_path, slot_path.with_suffix(".png"),
@@ -90,25 +94,89 @@ def run_evening(db, settings, day):
         db.finish_run(identifier, "success", "晚间日线分析已完成；公告按配置核验；HTML/PNG按配置导出")
         return {"status": "success", "day": day, "artifacts": artifacts, "email": email}
     except (Exception, KeyboardInterrupt):
+        if locals().get("export_id"):
+            db.finish_run(export_id, "failed", "晚间HTML/PNG导出未完成，已保存日线保留")
         db.finish_run(identifier, "failed", "晚间分析、公告或导出未完成；已保存数据保留，请查看对应任务及日志")
         raise
 
 
 def worker(db, settings):
     stopped = threading.Event()
-    pages_checked_at = None
     for signum in (signal.SIGINT, signal.SIGTERM):
         signal.signal(signum, lambda *_: stopped.set())
+    activity = {"phase": "启动检查"}
+
+    def pulse():
+        while not stopped.is_set():
+            try:
+                db.save_state(settings.source, "worker", {"at": now().isoformat(), "status": "running",
+                                                          "phase": activity["phase"], "pid": os.getpid()})
+            except Exception:
+                logger.warning("worker心跳写入失败", exc_info=True)
+            stopped.wait(20)
+
+    heartbeat = threading.Thread(target=pulse, daemon=True)
+    # The single-process worker lock is released by the OS even after a crash.
+    if db.engine.dialect.name == "sqlite":
+        import fcntl
+
+        path = Path(db.engine.url.database).resolve().with_suffix(".worker.lock")
+        path.parent.mkdir(parents=True, exist_ok=True)
+        guard = path.open("a")
+        try:
+            fcntl.flock(guard, fcntl.LOCK_EX | fcntl.LOCK_NB)
+        except BlockingIOError:
+            guard.close()
+            raise RuntimeError("该数据库已有worker运行，请勿重复启动") from None
+    else:
+        import hashlib
+
+        from sqlalchemy import text
+
+        guard = db.engine.connect()
+        lock_id = int.from_bytes(hashlib.sha256(b"stock-daily-worker").digest()[:8], "big", signed=True)
+        if not guard.execute(text("SELECT pg_try_advisory_lock(:key)"), {"key": lock_id}).scalar():
+            guard.close()
+            raise RuntimeError("该数据库已有worker运行，请勿重复启动")
+        guard.commit()  # Session advisory lock survives; avoid an idle transaction for the worker lifetime.
+    try:
+        heartbeat.start()
+        _worker_loop(db, settings, stopped, activity)
+    finally:
+        stopped.set()
+        heartbeat.join(timeout=5)
+        try:
+            db.save_state(settings.source, "worker", {"at": now().isoformat(), "status": "stopped",
+                                                      "phase": "已停止", "pid": os.getpid()})
+            if db.engine.dialect.name != "sqlite":
+                guard.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": lock_id})
+        finally:
+            guard.close()
+
+
+def _worker_loop(db, settings, stopped, activity):
+    pages_checked_at = None
+    backup_checked_at = None
     from .intraday import run_snapshot
 
     logger.info("定时任务启动：Asia/Shanghai 午间 %s；收盘 %s；晚间 %s（HTML/PNG）",
                 settings.midday_time, settings.schedule_time, settings.announcement_time)
     while not stopped.is_set():
         current = now()
+        if settings.backup_enabled and (backup_checked_at is None or current - backup_checked_at >= timedelta(minutes=15)):
+            from .operations import backup_database
+
+            backup_checked_at = current
+            activity["phase"] = "数据库备份"
+            try:
+                backup_database(db, settings)
+            except Exception:
+                logger.warning("数据库备份未完成，行情任务继续", exc_info=True)
         if settings.news_enabled and settings.source != "demo" and "08:00" <= current.strftime("%H:%M") < "21:00":
             from .news import collect_news
 
             try:
+                activity["phase"] = "快讯采集"
                 collect_news(db, settings)
             except Exception:
                 logger.warning("热点新闻采集未完成；行情任务继续运行", exc_info=True)
@@ -117,8 +185,11 @@ def worker(db, settings):
             ("close", settings.schedule_time, settings.announcement_time),
             ("evening", settings.announcement_time, None),
         ):
+            current = now()
             if due(db, settings, current, kind, cutoff, deadline):
                 try:
+                    activity["phase"] = {"midday": "午间采集与导出", "close": "收盘采集与导出",
+                                         "evening": "晚间日线分析与导出"}[kind]
                     day = current.strftime("%Y%m%d")
                     if kind == "evening":
                         run_evening(db, settings, day)
@@ -130,6 +201,7 @@ def worker(db, settings):
             from .mailer import flush_outbox
 
             try:
+                activity["phase"] = "邮件发送"
                 flush_outbox(db, settings)
             except Exception:
                 logger.warning("邮件处理未完成，请检查本地邮箱配置；分析结果已保留")
@@ -137,9 +209,17 @@ def worker(db, settings):
             from .pages import publish_pages
 
             pages_checked_at = now()
+            identifier = db.start_run(settings.source, now().strftime("%Y%m%d"), "pages")
             try:
+                activity["phase"] = "公开网站发布"
                 result = publish_pages(db, settings, settings.pages_repository)
+                db.save_state(settings.source, "pages", {"at": now().isoformat(), "status": result["status"],
+                                                         "url": result.get("url", "")})
+                db.finish_run(identifier, "success", f"公开网站处理：{result['status']}；上线以部署成功为准")
                 logger.info("GitHub Pages：%s", result["status"])
             except Exception:
+                db.finish_run(identifier, "failed", "公开网站发布未完成，将重试")
+                db.save_state(settings.source, "pages", {"at": now().isoformat(), "status": "failed"})
                 logger.warning("GitHub Pages发布未完成；报告和邮件已保留，10分钟后重试", exc_info=True)
+        activity["phase"] = "等待下一次检查"
         stopped.wait(30)

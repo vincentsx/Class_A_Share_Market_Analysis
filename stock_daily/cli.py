@@ -35,6 +35,28 @@ def main():
     snapshot.add_argument("--slot", choices=("midday", "close"), required=True)
     commands.add_parser("evening", help="执行完整日线分析、补查公告并导出HTML/PNG")
     commands.add_parser("track", help="输出已保存信号的观察统计")
+    commands.add_parser("health", help="查看worker心跳、任务阶段和备份状态")
+    commands.add_parser("backup", help="立即生成一致性数据库备份，不发送邮件")
+    archive = commands.add_parser("repair-archive", help="按冻结指标重建旧版遗漏候选，保留原始已发布依据")
+    archive.add_argument("--date")
+    simulation = commands.add_parser("backtest", help="输出下一开盘模拟成交、资金曲线与约束统计")
+    simulation.add_argument("--date", help="模拟截止日期")
+    simulation.add_argument("--strategy", choices=("all", "breakout", "pullback"), default="all")
+    simulation.add_argument("--cohort", choices=("all", "priority"), default="all")
+    simulation.add_argument("--rule-version", default="")
+    simulation.add_argument("--holding-days", type=int, default=10)
+    simulation.add_argument("--capital", type=float, default=100000)
+    simulation.add_argument("--weight", type=float, default=.1)
+    simulation.add_argument("--max-positions", type=int, default=10)
+    simulation.add_argument("--commission-bps", type=float, default=3)
+    simulation.add_argument("--min-commission", type=float, default=5)
+    simulation.add_argument("--sell-tax-bps", type=float, default=5)
+    simulation.add_argument("--transfer-bps", type=float, default=.1)
+    simulation.add_argument("--slippage-bps", type=float, default=5)
+    simulation.add_argument("--participation", type=float, default=.01)
+    simulation.add_argument("--split-day", default="")
+    summary = commands.add_parser("evidence-summary", help="手动生成并缓存带证据引用的AI摘要")
+    summary.add_argument("--date")
     html = commands.add_parser("export-html", help="导出可双击打开的离线HTML报告")
     html.add_argument("--date", help="指定已有报告日期，默认最新报告或采集状态")
     html.add_argument("--output", help="输出HTML路径，默认 data/html/数据源-latest.html")
@@ -183,6 +205,38 @@ def main():
             return
         elif args.command == "track":
             result = tracking(db, settings)
+        elif args.command == "health":
+            from .operations import health_view
+
+            result = health_view(db, settings)
+        elif args.command == "backup":
+            from .operations import backup_database
+
+            result = backup_database(db, settings, force=True)
+        elif args.command == "repair-archive":
+            from .archive_recovery import recover_archive
+            from .operations import backup_database
+
+            if args.date:
+                parse_day(args.date)
+            backup_database(db, settings, force=True)
+            with db.lock(settings.source):
+                result = recover_archive(db, settings, args.date)
+        elif args.command == "backtest":
+            from .backtest import Simulation, simulate
+
+            if args.date:
+                parse_day(args.date)
+            config = Simulation(**{k: getattr(args, k) for k in Simulation.__dataclass_fields__})
+            result = simulate(db, settings, args.date, config)
+        elif args.command == "evidence-summary":
+            from .evidence_ai import summarize_evidence
+            from .service import dashboard
+
+            report = dashboard(db, settings, args.date)["report"]
+            if not report:
+                raise ValueError("没有已发布报告")
+            result = summarize_evidence(db, settings, report)
         elif args.command == "export-html":
             from dataclasses import replace
 

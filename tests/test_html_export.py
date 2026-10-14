@@ -147,5 +147,7 @@ def test_html_io_failure_does_not_invalidate_published_database_report(populated
     assert result["html"]["status"] == "failed"
     assert db.latest_report("demo", "20261009") is not None
     assert previous.read_text() == "previous verified HTML"
-    task = db.rows(select(runs).order_by(runs.c.started_at.desc()).limit(1))[0]
+    task = db.rows(select(runs).where(runs.c.kind == "daily").order_by(runs.c.started_at.desc()).limit(1))[0]
     assert task["status"] == "success" and "HTML导出失败" in task["message"]
+    export = db.rows(select(runs).where(runs.c.kind == "export").order_by(runs.c.started_at.desc()).limit(1))[0]
+    assert export["status"] == "failed"

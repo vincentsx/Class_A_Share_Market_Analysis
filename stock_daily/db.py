@@ -25,6 +25,40 @@ from sqlalchemy.exc import IntegrityError
 from .config import now
 
 metadata = MetaData()
+announcement_evidence = Table(
+    "announcement_evidence", metadata,
+    Column("source", String(20), primary_key=True),
+    Column("id", String(64), primary_key=True),
+    Column("day", String(8), nullable=False, index=True),
+    Column("first_seen_at", String(40), nullable=False),
+    Column("payload", JSON, nullable=False),
+)
+evidence_summaries = Table(
+    "evidence_summaries", metadata,
+    Column("source", String(20), primary_key=True),
+    Column("day", String(8), primary_key=True),
+    Column("fingerprint", String(64), primary_key=True),
+    Column("payload", JSON, nullable=False),
+)
+watch_plans = Table(
+    "watch_plans", metadata,
+    Column("code", String(20), primary_key=True),
+    Column("payload", JSON, nullable=False),
+    Column("updated_at", String(40), nullable=False),
+)
+watch_evaluations = Table(
+    "watch_evaluations", metadata,
+    Column("source", String(20), primary_key=True),
+    Column("day", String(8), primary_key=True),
+    Column("code", String(20), primary_key=True),
+    Column("payload", JSON, nullable=False),
+)
+system_state = Table(
+    "system_state", metadata,
+    Column("source", String(20), primary_key=True),
+    Column("key", String(40), primary_key=True),
+    Column("payload", JSON, nullable=False),
+)
 news_items = Table(
     "news_items", metadata,
     Column("provider", String(20), primary_key=True),
@@ -269,3 +303,7 @@ class Database:
                     "added_at": now().isoformat(),
                 },
             )
+
+    def save_state(self, source, key, payload):
+        with self.engine.begin() as connection:
+            self.upsert(connection, system_state, {"source": source, "key": key, "payload": payload})
