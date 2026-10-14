@@ -179,7 +179,8 @@ def export_pages(db, settings, output="data/pages", render_image=None):
 
 def gh(*arguments, check=True):
     try:
-        timeout = 420 if arguments[:2] == ("release", "upload") else 30 if arguments[0] == "api" else 180
+        # The report bundle includes PNGs; slow uploads must not restart from zero every seven minutes.
+        timeout = 1200 if arguments[:2] == ("release", "upload") else 30 if arguments[0] == "api" else 180
         result = subprocess.run(["gh", *arguments], capture_output=True, text=True, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired):
         raise DataError("GitHub命令不可用或超时；请检查gh安装、登录及网络") from None

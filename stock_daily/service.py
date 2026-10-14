@@ -51,6 +51,10 @@ def dashboard(db, settings, day=None):
     report["events"] = tag_events(stored_session["events"])
     report["event_status"] = stored_session["event_status"]
     data["report"] = report
+    if "trade_plan" not in report:
+        from .trade_plan import build_trade_plan
+
+        report["trade_plan"] = build_trade_plan(db, settings, frozen_report)
     from .observations import plan_views
     from .research import changes, evidence
 

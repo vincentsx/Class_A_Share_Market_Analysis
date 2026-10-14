@@ -221,6 +221,16 @@ def run_daily(db, settings, day=None, force=False, provider=None):
             watched = db.rows(select(watchlist))
             if getattr(active_provider, "data_notes", None):
                 report["data_notes"] = active_provider.data_notes
+            future_calendar = None
+            calendar_end = (parse_day(day) + timedelta(days=30)).strftime("%Y%m%d")
+            try:
+                future_calendar = active_provider.calendar(day, calendar_end)
+                if len(set(future_calendar)) != len(future_calendar) or any(
+                        d < day or d > calendar_end for d in future_calendar):
+                    raise DataError("下一交易日历响应无效")
+            except Exception:
+                future_calendar = None
+                logger.warning("下一交易日历暂未核验；日线报告继续发布，计划保留待核验标记")
             with db.engine.begin() as connection:
                 # Publish today's raw data, metadata, report and signals atomically.
                 save_session(db, connection, source, today, today_rows)
@@ -239,6 +249,16 @@ def run_daily(db, settings, day=None, force=False, provider=None):
                                      "priority": candidate in report["candidates"]},
                         )
                     )
+                if future_calendar is not None:
+                    opened = set(future_calendar)
+                    for offset in range(1, 31):
+                        future_day = (parse_day(day) + timedelta(days=offset)).strftime("%Y%m%d")
+                        db.upsert(connection, trading_days, {"source": source, "day": future_day,
+                                                             "is_open": int(future_day in opened)})
+                from .trade_plan import build_trade_plan
+
+                report["trade_plan"] = build_trade_plan(db, settings, report, connection=connection, frozen=True)
+                db.upsert(connection, reports, {"source": source, "day": day, "payload": report})
                 plan_views(db, settings, report, watched, persist=True, connection=connection)
             db.finish_run(identifier, "success", f"报告已生成，完整存档{len(report['all_candidates'])}个信号；"
                           f"优先展示{len(report['candidates'])}个")

@@ -95,6 +95,7 @@ async function load(day = selectedDay) {
 
 function renderReport(data) {
   const report = data.report, m = report.market, q = report.quality;
+  renderTradePlan(report.trade_plan);
   $("market-date").textContent = `${dateLabel(report.day)} · ${m.count} 只当日有行情股票${data.source === "baostock" ? " · 沪深A股，不含北交所" : ""}`;
   const cards = [
     ["沪深300", pct(m.benchmark_pct), color(m.benchmark_pct), `近20日 ${pct(m.benchmark_return20)}`],
@@ -177,6 +178,31 @@ function renderScorecard() {
   }).join("") || emptyRow("当前范围没有已存信号",7);
 }
 let backtestId = 0;
+function renderTradePlan(plan) {
+  const output = $("trade-plan-content");
+  if (!plan) { output.textContent = "此旧报告未保存下一交易日计划，请重导出日线报告。"; return; }
+  const counts = plan.counts || {}, p = plan.parameters, scenario = plan.scenario;
+  const today = new Date().toLocaleDateString("sv-SE", {timeZone:"Asia/Shanghai"}).replaceAll("-", "");
+  const historical = plan.target_day && plan.target_day <= today;
+  const notice = plan.origin === "derived" ? "旧报告按截止日数据补算，非当时预先发布的计划。" : `计划保存 ${timeLabel(plan.created_at)}（北京时间）。`;
+  const buy = (i) => `<article class="research-card plan-card"><h3>${esc(i.name)} <small>${esc(i.code)} · ${esc(i.label)} · 优先级 ${i.rank}</small></h3>
+    <p><b>${esc({planned:"尝试买入",conditional:"先卖出后才尝试买入",watch:"仅观察 / 不买入"}[i.status])}</b>：${esc(i.reason)}</p>
+    <div class="plan-facts"><p>收盘参考 <b>${num(i.reference_close,4)} 元</b><br>参考买入价 <b>${num(i.reference_price,4)} 元</b></p><p>参考股数 <b>${num(i.reference_shares,0)} 股</b><br>参考支出 <b>${num(i.reference_spent)} 元</b></p></div>
+    <p>失效参考 ${num(i.invalidation_price,4)} 元${i.upper_open_exclusive ? ` · 开盘价须低于 ${num(i.upper_open_exclusive,4)} 元以避开接近涨停情形` : ""}</p>
+    <details><summary>买入依据与执行条件</summary><p>信号发布 ${timeLabel(i.published_at)}（北京时间） · ${esc(i.rule_version || "版本未记录")}</p><ul>${(i.reasons || []).map((r) => `<li>${esc(r)}</li>`).join("")}${(i.conditions || []).map((r) => `<li>${esc(r)}</li>`).join("")}</ul><ul>${(i.risks || []).map((r) => `<li>${esc(r)}</li>`).join("")}</ul></details></article>`;
+  const sell = (i) => `<article class="research-card plan-card"><h3>${esc(i.name)} <small>${esc(i.code)} · ${num(i.shares,0)} 股</small></h3><p><b>下一可模拟开盘尝试卖出</b>：${esc(i.reason)}</p><p>收盘参考 ${num(i.reference_close,4)} 元 · 参考卖出价 ${num(i.reference_price,4)} 元<br>参考净回款 ${num(i.reference_proceeds)} 元（扣卖出费用）</p><p>退出触发 ${dateLabel(i.exit_trigger_day)} · 已延期 ${(i.exit_delays || []).length} 个交易日</p><ul>${i.conditions.map((r) => `<li>${esc(r)}</li>`).join("")}</ul></article>`;
+  const hold = (i) => `<article class="research-card plan-card"><h3>${esc(i.name)} <small>${esc(i.code)} · ${num(i.shares,0)} 股</small></h3><p>${esc(i.reason)}</p><p>已核验持有 ${i.held_sessions} / ${p.holding_days} 个交易日<br>失效参考 ${num(i.invalidation_price,4)} 元 · 收盘参考 ${num(i.reference_close,4)} 元</p></article>`;
+  const actionable = (plan.entries || []).filter((i) => i.status !== "watch"), watch = (plan.entries || []).filter((i) => i.status === "watch");
+  output.innerHTML = `<div class="notice${plan.status === "blocked" || !plan.calendar_verified ? " error" : ""}"><span>依据 ${dateLabel(plan.basis_day)} 日线 → ${plan.target_day ? `计划交易日 ${dateLabel(plan.target_day)}` : "下一交易日待日历核验，不推测日期"}。${esc(notice)}${historical ? " 目标日已到或已过，这是该报告日期的计划，不代表明天的新计划。" : ""}${plan.status === "late" ? " 计划生成晚于目标开盘，仅供回放核对。" : ""}</span></div>
+    ${plan.status === "blocked" ? `<p class="negative">${esc(plan.message)}${plan.stop ? ` ${esc(plan.stop.reason)}` : ""}</p>` : `
+    <p>待尝试买入 ${counts.planned || 0} 只 · 依赖卖出 ${counts.conditional || 0} 只 · 待卖出 ${counts.exits || 0} 只 · 继续持有 ${counts.holds || 0} 只 · 仅观察 ${counts.watch || 0} 条</p>
+    ${scenario ? `<p class="muted">现有现金 ${num(scenario.cash_before_sales)} 元 · 若全部待卖出成功，参考回款 ${num(scenario.reference_sale_proceeds)} 元、参考现金 ${num(scenario.reference_cash_after_sales)} 元。${esc(scenario.note)}</p>` : ""}
+    <h3>待卖出</h3><div class="research-grid">${(plan.exits || []).map(sell).join("") || '<p class="muted">暂无按当前规则需要退出的模拟持仓。</p>'}</div>
+    <h3>待买入候选</h3><div class="research-grid">${actionable.map(buy).join("") || '<p class="muted">暂无满足参考资金与仓位条件的买入计划；查看下方仅观察原因。</p>'}</div>
+    <details><summary>继续持有 · ${counts.holds || 0} 只</summary><div class="research-grid">${(plan.holds || []).map(hold).join("") || "暂无继续持有记录"}</div></details>
+    <details><summary>仅观察 / 不买入 · ${watch.length} 条</summary><div class="research-grid">${watch.map(buy).join("") || "暂无"}</div></details>`}
+    <details><summary>计划规则与默认参数</summary><p>${esc(plan.method)}</p><p>初始资金 ${num(p.capital,0)} 元 · 单只 ${num(p.weight * 100,0)}% · 最多 ${p.max_positions} 只 · 持有 ${p.holding_days} 交易日 · 每边滑点 ${p.slippage_bps} 基点 · 前一日量能参与上限 ${num(p.participation * 100,1)}%</p></details>`;
+}
 let tradeRows = [], tradeSearch = "", tradeStatus = "all", tradeCutoff = "", tradeHoldingDays = 10;
 const tradeEvidenceOpen = new Set();
 function rememberTradeEvidence() {
