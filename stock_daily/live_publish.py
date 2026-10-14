@@ -32,9 +32,12 @@ def public_portfolio(db, settings):
     simulation = simulate(db, settings, report["day"])
     simulation["valuation"] = value_portfolio(db, settings, simulation)
     valuation = simulation["valuation"]
+    from .trade_plan import build_trade_plan
+
+    plan = report.get("trade_plan") or build_trade_plan(db, settings, report)
     return {"version": VERSION, "source": settings.source, "report_day": report["day"],
             "data_at": valuation.get("captured_at", report.get("generated_at", "")),
-            "backtest": simulation}
+            "backtest": simulation, "trade_plan": plan}
 
 
 def publish_portfolio(db, settings):

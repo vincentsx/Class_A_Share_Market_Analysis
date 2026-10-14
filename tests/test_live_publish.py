@@ -104,6 +104,35 @@ def test_deployment_refreshes_old_public_interface_without_private_inputs(popula
     assert public_portfolio(db, settings)['source'] == settings.source
 
 
+def test_interface_deployment_adds_plan_and_never_imports_future_day_plan(populated, tmp_path):
+    from copy import deepcopy
+
+    db, settings, _ = populated
+    folder = tmp_path / 'public'
+    export_pages(db, settings, folder, render_image=fake_png)
+    spec = importlib.util.spec_from_file_location('refresh_ui', '.github/scripts/refresh_public_ui.py')
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    live = public_portfolio(db, settings)
+    live['trade_plan']['method'] = '同日公开计划核验标记'
+    module.refresh(folder, 'example/reports', Path('stock_daily').resolve(), live)
+    manifest = json.loads((folder / 'manifest.json').read_text())
+    for record in manifest['reports']:
+        if record['slot'] in {'evening', 'portfolio'}:
+            html = (folder / record['html']).read_text()
+            assert 'id="next-trade-plan"' in html
+            assert '同日公开计划核验标记' in html
+    future = deepcopy(live)
+    future['report_day'] = '20261012'
+    future['trade_plan'].update(basis_day='20261012', method='未来计划不能进入旧报告')
+    module.refresh(folder, 'example/reports', Path('stock_daily').resolve(), future)
+    for record in manifest['reports']:
+        if record['slot'] in {'evening', 'portfolio'}:
+            html = (folder / record['html']).read_text()
+            assert '未来计划不能进入旧报告' not in html
+            assert '同日公开计划核验标记' in html
+
+
 def test_phone_reads_new_live_values_without_reloading_report(browser, populated, tmp_path):
     from datetime import datetime
 
