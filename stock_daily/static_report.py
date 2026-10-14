@@ -86,12 +86,17 @@ def snapshot_view(payload):
     }
 
 
-def daily_view(payload):
+def daily_view(payload, *, fill_history=None):
     dashboard = payload["dashboard"]
     report = dashboard["report"]
+    if fill_history is None:
+        from .fills import history_fills
+
+        fill_history = history_fills(payload.get("backtest"), dashboard.get("source", ""))
     result = {"kind": "daily", "day": report["day"] if report else None,
               "dashboard": dashboard, "report": report, "tracking": payload["tracking"], "metrics": [],
-              "backtest": payload.get("backtest")}
+              "backtest": payload.get("backtest"),
+              "fills": fill_history}
     if not report:
         return result
     market = report["market"]

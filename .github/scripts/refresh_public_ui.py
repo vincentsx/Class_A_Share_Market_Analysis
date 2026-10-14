@@ -34,6 +34,9 @@ def refresh(folder, repository, assets, live_plan=None):
     spec = importlib.util.spec_from_file_location('public_static_report', assets / 'static_report.py')
     helpers = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(helpers)
+    fill_spec = importlib.util.spec_from_file_location('public_fill_history', assets / 'fills.py')
+    fill_helpers = importlib.util.module_from_spec(fill_spec)
+    fill_spec.loader.exec_module(fill_helpers)
     env = Environment(loader=FileSystemLoader(assets / 'templates'), autoescape=select_autoescape(['html']))
     helpers.template_helpers(env)
     for record in records:
@@ -61,7 +64,9 @@ def refresh(folder, repository, assets, live_plan=None):
             offline=True, nonce=secrets.token_urlsafe(24),
             exported_at=exported.strftime('%Y-%m-%d %H:%M（北京时间）'),
             css=(assets / 'static/style.css').read_text() + (assets / 'static/mail_report.css').read_text(),
-            static_report=helpers.daily_view(payload), javascript=(assets / 'static/app.js').read_text(),
+            static_report=helpers.daily_view(payload, fill_history=fill_helpers.history_fills(
+                payload.get('backtest'), payload['dashboard']['source'])),
+            javascript=(assets / 'static/app.js').read_text(),
             snapshot=encode_snapshot(payload))
         path.write_text(html)
         manifest['files'][record['html']] = hashlib.sha256(path.read_bytes()).hexdigest()

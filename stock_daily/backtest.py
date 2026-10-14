@@ -14,6 +14,7 @@ from sqlalchemy import select
 from .config import SHANGHAI
 from .db import bars, reports, sessions, signals, trading_days
 from .execution import entry_guard, entry_size, industry_of, market_gate
+from .fills import make_fill
 from .performance import performance
 
 DEFAULT_PROFILE = "guarded"
@@ -132,7 +133,7 @@ def simulate(db, settings, as_of=None, config=None):
     session_rows = db.rows(select(sessions).where(sessions.c.source == settings.source,
                                                  sessions.c.day <= as_of if as_of else True).order_by(sessions.c.day))
     if not session_rows:
-        return {"status": "empty", "parameters": asdict(config), "curve": [], "trades": [], "skipped": {},
+        return {"status": "empty", "parameters": asdict(config), "curve": [], "trades": [], "fills": [], "skipped": {},
                 "method": "尚无行情，无法模拟", "summary": {"initial_capital": config.capital,
                 "market_value": None, "available_cash": None, "equity": None, "profit": None,
                 "through": None}, "periods": [], "positions": []}
@@ -184,6 +185,7 @@ def simulate(db, settings, as_of=None, config=None):
         entries[entry_day].append({**signal, "published_at": timestamp.isoformat()})
     cash, peak, drawdown = config.capital, config.capital, 0
     positions, trades, curve = {}, [], []
+    fills = []
     stop = None
     paused = False
     benchmark_origin = session_map.get(dates[0], {}).get("benchmark", {}).get("close") if dates else None
@@ -254,6 +256,7 @@ def simulate(db, settings, as_of=None, config=None):
                            "entry_risk": position["entry_risk"], "industry": position["industry"],
                            "net_return": ((gross - cost) / position["spent"] - 1) * 100,
                            "exit_reason": position["exit_due"]})
+            fills.append(make_fill(trades[-1], settings.source, "sell", sequence=len(fills) + 1, cash_after=cash))
             del positions[code]
         for signal in sorted(entries[day], key=lambda s: (-s["payload"].get("relative20", 0), s["code"], s["strategy"])):
             code, payload = signal["code"], signal["payload"]
@@ -312,6 +315,8 @@ def simulate(db, settings, as_of=None, config=None):
                                "exit_trigger_day": None, "exit_trigger_close": None, "exit_delays": [],
                                "signal_day": signal["day"], "name": payload["name"], "strategy": signal["strategy"],
                                "invalidation_adj": payload["invalidation_adj"], "exit_due": None}
+            fills.append(make_fill({"code": code, **positions[code]}, settings.source, "buy",
+                                   sequence=len(fills) + 1, cash_after=cash))
         for code, position in positions.items():
             position["held_sessions"] = index - position["entry_index"] + 1
             row = history.get((code, day))
@@ -353,6 +358,7 @@ def simulate(db, settings, as_of=None, config=None):
                        "mode": "prospective" if config.policy_start_day else "replay"},
             "performance": metrics,
             "parameters": asdict(config), "curve": curve, "trades": trades, "skipped": dict(skipped),
+            "fills": list(reversed(fills)),
             "positions": [{"code": c, **p, **position_value(p, p["mark"])} for c, p in positions.items()],
             "periods": periods,
             "summary": {"return": final["return"], "benchmark_return": final["benchmark_return"],

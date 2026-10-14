@@ -262,6 +262,92 @@ function exportTradeLedger() {
   link.href = url; link.download = `模拟交易明细-${tradeCutoff || "最新"}.csv`;
   link.click(); setTimeout(() => URL.revokeObjectURL(url), 1000);
 }
+let fillRows = [], fillHistoryOpen = false;
+const fillFilter = {query:"",side:"all",from:"",to:"",page:1,size:20};
+function legacyFillRows(data) {
+  const source = OFFLINE?.dashboard?.source || state?.source || "";
+  const make = (t,side) => {
+    const sell = side === "sell", prefix = sell ? "exit" : "entry";
+    const price = t[`${prefix}_price`], fee = t[`${prefix}_fee`], opening = t[`${prefix}_open`];
+    const notional = price != null && t.shares != null ? price * t.shares : null;
+    const roundTrip = `${source}|${t.code}|${t.strategy}|${t.entry_day}`;
+    const flow = sell ? t.proceeds ?? (notional != null && fee != null ? notional - fee : null) : t.spent ?? (notional != null && fee != null ? notional + fee : null);
+    return {id:`${roundTrip}|${side}`,round_trip_id:roundTrip,source,sequence:null,day:t[`${prefix}_day`],side,code:t.code,name:t.name,strategy:t.strategy,label:t.label,rule_version:t.rule_version,
+      shares:t.shares,price,open_price:opening,notional,fee,cash_flow:flow == null ? null : sell ? flow : -flow,cash_after:null,
+      slippage_cost:price != null && opening != null && t.shares != null ? t.shares * (sell ? opening - price : price - opening) : null,
+      signal_day:t.signal_day,published_at:t.published_at,entry_day:t.entry_day,entry_price:t.entry_price,entry_fee:t.entry_fee,invalidation_price:t.invalidation_price,
+      entry_reasons:t.entry_reasons || [],entry_risk:t.entry_risk,realized_profit:sell ? t.profit : null,
+      reason:sell ? t.exit_reason : "已发布信号，下一交易日开盘模拟入场",exit_trigger_day:sell ? t.exit_trigger_day : null,
+      exit_trigger_close:sell ? t.exit_trigger_close : null,exit_delays:sell ? t.exit_delays || [] : [],origin:"legacy_derived"};
+  };
+  return [...(data.trades || []).flatMap((t) => [make(t,"buy"),make(t,"sell")]),...(data.positions || []).map((t) => make(t,"buy"))]
+    .sort((a,b) => String(b.day).localeCompare(String(a.day)) || b.id.localeCompare(a.id));
+}
+function matchingFills() {
+  const query = fillFilter.query.trim().toLowerCase(), from = fillFilter.from.replaceAll("-",""), to = fillFilter.to.replaceAll("-","");
+  return fillRows.filter((f) => (fillFilter.side === "all" || f.side === fillFilter.side) && (!from || f.day >= from) && (!to || f.day <= to) &&
+    [f.code,f.name,f.label,f.strategy,f.rule_version,f.id].join(" ").toLowerCase().includes(query));
+}
+function renderFillHistory() {
+  const rows = matchingFills(), pages = Math.max(1,Math.ceil(rows.length / fillFilter.size));
+  fillFilter.page = Math.min(Math.max(1,fillFilter.page),pages);
+  const start = (fillFilter.page - 1) * fillFilter.size, visible = rows.slice(start,start + fillFilter.size);
+  const invalidRange = fillFilter.from && fillFilter.to && fillFilter.from > fillFilter.to;
+  $("fill-count").textContent = invalidRange ? "起始日期不能晚于结束日期，请调整筛选条件。" : `共 ${rows.length} / ${fillRows.length} 笔成交 · 买入 ${rows.filter((f) => f.side === "buy").length} / 卖出 ${rows.filter((f) => f.side === "sell").length} · 本页 ${visible.length} 笔 · 历史截止 ${dateLabel(tradeCutoff)}`;
+  $("fill-table").innerHTML = visible.map((f) => `<tr><td>${dateLabel(f.day)}<small>开盘模拟</small></td><td>${esc(f.name)}<small>${esc(f.code)}</small></td><td>${f.side === "buy" ? "买入" : "卖出"}</td><td>${num(f.price,4)}</td><td>${num(f.shares,0)}</td><td>${num(f.notional)}</td><td>${num(f.fee)}</td><td>${num(f.cash_flow)}</td><td>${f.side === "sell" ? num(f.realized_profit) : "—"}</td><td><button type="button" class="row-detail" data-fill-id="${esc(f.id)}">查看详情</button></td></tr>`).join("") || emptyRow("暂无符合筛选条件的成交。未成交计划和盘中估值不计入历史成交。",10);
+  $("fill-page").textContent = `第 ${fillFilter.page} / ${pages} 页`;
+  $("fill-prev").disabled = fillFilter.page <= 1;
+  $("fill-next").disabled = fillFilter.page >= pages;
+  $("export-fills").disabled = !rows.length;
+}
+function openFillDetail(id) {
+  const f = fillRows.find((item) => item.id === id);
+  if (!f) return;
+  const sell = f.side === "sell", risk = f.entry_risk;
+  $("fill-detail-title").textContent = `${f.name || f.code} · ${sell ? "卖出" : "买入"}成交详情`;
+  $("fill-detail-body").innerHTML = `<p>${dateLabel(f.day)} · 北京时间 · 开盘模拟</p><dl class="trade-prices">
+    ${[["模拟成交价",`${num(f.price,4)} 元`],["股数",`${num(f.shares,0)} 股`],["成交金额",`${num(f.notional)} 元`],["本笔费用",`${num(f.fee)} 元`],["现金变化",`${num(f.cash_flow)} 元`],["成交后现金",`${num(f.cash_after)} 元`]].map(([k,v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join("")}</dl>
+    <p>开盘原价 ${num(f.open_price,4)} 元 → 模拟成交价 ${num(f.price,4)} 元 · 本笔滑点成本 ${num(f.slippage_cost)} 元（已反映在成交价中）。</p>
+    <p>${sell ? `该笔卖出结束的交易扣费已实现盈亏 ${num(f.realized_profit)} 元，包含买卖双边费用；原买入 ${dateLabel(f.entry_day)}，买入价 ${num(f.entry_price,4)} 元，买入费用 ${num(f.entry_fee)} 元。` : "买入成交本身不确认已实现盈亏；盈亏记录在对应卖出成交中，本笔费用仅为已发生买入费用。"}</p>
+    <p>${esc(f.label || f.strategy)} · ${esc(f.rule_version || "版本未记录")} · 信号日 ${dateLabel(f.signal_day)} · 发布 ${timeLabel(f.published_at)}（北京时间）</p>
+    <p>${esc(f.reason)}</p><ul>${(f.entry_reasons || []).map((r) => `<li>${esc(r)}</li>`).join("")}</ul>
+    <p>失效参考 ${num(f.invalidation_price,4)} 元；不是保证成交价。</p>
+    ${risk?.risk_budget ? `<p>入场风险预算 ${num(risk.risk_budget)} 元 · 预计风险 ${num(risk.estimated_risk)} 元 · 风险距离 ${num(risk.risk_distance,4)} 元。跳空或退出延期可能超过预算。</p>` : ""}
+    ${sell && f.exit_trigger_day ? `<p>退出触发 ${dateLabel(f.exit_trigger_day)} · 当日收盘 ${num(f.exit_trigger_close,4)} 元。</p>` : ""}
+    ${(f.exit_delays || []).length ? `<ul>${f.exit_delays.map((d) => `<li>${dateLabel(d.day)}：${esc(d.reason)}</li>`).join("")}</ul>` : ""}
+    <p class="muted">成交编号 ${esc(f.id)}${f.sequence != null ? ` · 模拟执行序号 ${f.sequence}` : ""}</p>
+    <p class="muted">${f.origin === "legacy_derived" ? "此旧版成交由买卖明细恢复，未保存的执行顺序及成交后现金留空。 " : ""}日线模拟记录，没有实际撮合的分钟或秒级时间。</p>`;
+  $("fill-dialog").showModal();
+}
+function exportFillHistory() {
+  const cell = (value) => `"${(typeof value === "number" ? String(value) : String(value ?? "").replace(/^([\s]*[=+@-])/, "'$1")).replaceAll('"','""')}"`;
+  const header = ["成交编号","成交日期","时段","方向","代码","名称","策略","规则版本","股数","开盘原价","模拟成交价","成交金额","本笔费用","现金变化","成交后现金","本笔滑点成本","卖出对应交易已实现盈亏","信号日期","信号发布时间","原买入日期","原买入价","原买入费用","失效价","入场风险预算","预计入场风险","退出触发日","退出触发收盘价","成交原因","原始信号依据","退出延期记录","执行序号","记录来源"];
+  const values = matchingFills().map((f) => [f.id,f.day,"开盘模拟",f.side === "buy" ? "买入" : "卖出",f.code,f.name,f.label || f.strategy,f.rule_version,f.shares,f.open_price,f.price,f.notional,f.fee,f.cash_flow,f.cash_after,f.slippage_cost,f.realized_profit,f.signal_day,f.published_at,f.entry_day,f.entry_price,f.entry_fee,f.invalidation_price,f.entry_risk?.risk_budget,f.entry_risk?.estimated_risk,f.exit_trigger_day,f.exit_trigger_close,f.reason,(f.entry_reasons || []).join("；"),(f.exit_delays || []).map((d) => `${d.day} ${d.reason}`).join("；"),f.sequence,f.origin]);
+  const url = URL.createObjectURL(new Blob(["\ufeff" + [header,...values].map((r) => r.map(cell).join(",")).join("\r\n")],{type:"text/csv;charset=utf-8"}));
+  const link = document.createElement("a");link.href = url;link.download = `历史全部成交-${tradeCutoff || "最新"}.csv`;
+  link.click();setTimeout(() => URL.revokeObjectURL(url),1000);
+}
+function setupFillHistory() {
+  for (const [id,key] of [["fill-search","query"],["fill-side","side"],["fill-from","from"],["fill-to","to"],["fill-size","size"]]) {
+    $(id).value = fillFilter[key];
+    $(id).addEventListener(id === "fill-search" ? "input" : "change", (event) => {
+      fillFilter[key] = key === "size" ? Number(event.target.value) : event.target.value;
+      fillFilter.page = 1;renderFillHistory();
+    });
+  }
+  $("fill-prev").addEventListener("click", () => {fillFilter.page -= 1;renderFillHistory();});
+  $("fill-next").addEventListener("click", () => {fillFilter.page += 1;renderFillHistory();});
+  $("fill-reset").addEventListener("click", () => {
+    Object.assign(fillFilter,{query:"",side:"all",from:"",to:"",page:1});
+    for (const [id,key] of [["fill-search","query"],["fill-side","side"],["fill-from","from"],["fill-to","to"]]) $(id).value = fillFilter[key];
+    renderFillHistory();
+  });
+  $("export-fills").addEventListener("click",exportFillHistory);
+  $("fill-table").addEventListener("click", (event) => {const button = event.target.closest("[data-fill-id]");if (button) openFillDetail(button.dataset.fillId);});
+  $("fill-history").addEventListener("toggle", () => {fillHistoryOpen = $("fill-history").open;});
+  $("show-fill-history").addEventListener("click", () => {$("fill-history").open = true;fillHistoryOpen = true;$("fill-history").scrollIntoView({block:"start"});});
+  renderFillHistory();
+}
 async function loadBacktest() {
   const id = ++backtestId, day = state?.report?.day;
   if (!day) return;
@@ -280,6 +366,7 @@ async function loadBacktest() {
 }
 function renderBacktest(data) {
   rememberTradeEvidence();
+  if ($("fill-history")) fillHistoryOpen = $("fill-history").open;
   const valuation = data.valuation ? {...data.valuation} : null;
   if (OFFLINE && valuation?.status === "available") {
     const parts = Object.fromEntries(new Intl.DateTimeFormat("sv-SE", {timeZone:"Asia/Shanghai",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false}).formatToParts(new Date()).map((p) => [p.type,p.value]));
@@ -326,6 +413,13 @@ function renderBacktest(data) {
     .sort((a,b) => (a.status === b.status ? String(b.exit_day || b.entry_day).localeCompare(String(a.exit_day || a.entry_day)) || a.code.localeCompare(b.code) : a.status === "open" ? -1 : 1));
   tradeCutoff = s.through || data.summary.through;
   tradeHoldingDays = p.holding_days;
+  fillRows = data.fills ?? legacyFillRows(data);
+  const fillHistory = `<details id="fill-history" class="panel research-panel"${fillHistoryOpen ? " open" : ""}><summary>历史全部成交 · ${fillRows.length} 笔</summary><div class="research-body">
+    <p class="muted">每次已模拟成交的买入、卖出分别列一笔，最新在前；涵盖当前模拟方案截至所选日期的全部历史。日期表示开盘模拟时段，未记录真实撮合分钟。</p>
+    <div class="fill-filters"><label>搜索名称、代码或策略<input id="fill-search" type="search" placeholder="搜索全部历史成交"></label><label>成交方向<select id="fill-side"><option value="all">全部买入 / 卖出</option><option value="buy">仅买入</option><option value="sell">仅卖出</option></select></label><label>起始日期<input id="fill-from" type="date"></label><label>结束日期<input id="fill-to" type="date"></label><label>每页笔数<select id="fill-size"><option value="20">20</option><option value="50">50</option><option value="100">100</option></select></label></div>
+    <div class="research-actions"><button id="fill-reset" type="button" class="button secondary">清除筛选</button><button id="export-fills" type="button" class="button secondary">导出全部筛选成交 CSV</button></div><p id="fill-count" class="muted" role="status"></p>
+    <div class="table-wrap"><table><thead><tr><th>成交日期</th><th>股票</th><th>方向</th><th>成交价（元）</th><th>股数</th><th>成交额（元）</th><th>费用（元）</th><th>现金变化（元）</th><th>已实现盈亏（元）</th><th>详情</th></tr></thead><tbody id="fill-table"></tbody></table></div>
+    <div class="fill-pagination"><button id="fill-prev" type="button" class="button secondary">上一页</button><span id="fill-page" aria-live="polite"></span><button id="fill-next" type="button" class="button secondary">下一页</button></div></div></details>`;
   const ledger = `<section class="panel research-panel"><div class="panel-heading"><div><h2>买卖时间与价格</h2><p>持仓优先、最近交易在前；日期为北京时间，开盘价加减滑点模拟。</p></div></div>
     <div class="table-toolbar trade-toolbar"><label class="search"><input id="trade-search" type="search" aria-label="搜索模拟交易" placeholder="搜索名称、代码或策略" value="${esc(tradeSearch)}"></label><select id="trade-status" aria-label="模拟交易状态"><option value="all">全部交易</option><option value="open">当前持仓 / 待退出</option><option value="closed">已卖出</option></select><button id="export-trades" type="button" class="button secondary">导出当前明细 CSV</button></div>
     <p id="trade-count" class="muted trade-count"></p><div id="trade-ledger" class="trade-grid"></div></section>`;
@@ -336,7 +430,7 @@ function renderBacktest(data) {
     chart = `<svg class="price-chart" viewBox="0 0 600 165" role="img" aria-label="模拟组合与沪深300累计变化"><polyline class="chart-line" points="${points("return")}"/><polyline fill="none" stroke="#b18c54" stroke-width="2" points="${points("benchmark_return")}"/></svg><p class="muted">绿色：模拟组合 · 棕色：沪深300 · ${dateLabel(curve[0].day)} → ${dateLabel(curve[curve.length-1].day)}${live ? " · 最后一点为所标时点的盘中估值" : ""}</p>`;
   }
   $("backtest-output").innerHTML = `${syncNotice}${valuationNotice}${policyNotice}${data.stop ? `<div class="notice error">${esc(data.stop.reason)} · ${dateLabel(data.stop.day)}；净值仅计算至 ${dateLabel(data.summary.through)}</div>` : ""}${accountCards}
-    <p class="muted">已实现盈亏 ${num(s.realized_profit)} 元 · 持仓浮盈亏 ${num(s.unrealized_profit)} 元；两者合计为账户盈亏，浮盈亏仅扣已发生买入费用。</p>${ledger}
+    <p class="muted">已实现盈亏 ${num(s.realized_profit)} 元 · 持仓浮盈亏 ${num(s.unrealized_profit)} 元；两者合计为账户盈亏，浮盈亏仅扣已发生买入费用。</p><div class="research-actions"><button id="show-fill-history" type="button" class="button primary">查看全部历史成交（${fillRows.length}笔）</button></div>${fillHistory}${ledger}
     <div class="tracking-grid"><div class="tracking-card"><h3>模拟组合累计变化</h3><div class="metric-value">${pct(s.return)}</div><p>沪深300同期 ${pct(s.benchmark_return)}</p></div><div class="tracking-card"><h3>日线组合最大回撤</h3><div class="metric-value">${pct(s.max_drawdown)}</div><p>已卖出 ${s.closed_trades || 0} / 未平仓 ${s.open_positions || 0}</p></div><div class="tracking-card"><h3>累计模拟费用</h3><div class="metric-value">${num(s.fees)} 元</div><p>未平仓费用只含已发生的入场费用</p></div></div>${chart}
     ${performanceCards}<details class="panel research-panel"><summary>模拟规则与参数</summary><div class="research-body"><p>${esc(data.method)}</p><p>${esc(parameterText)}${OFFLINE ? " · 离线快照固定参数，需在本地服务中修改" : ""}</p><p>${esc(riskText)}</p></div></details>
     <details class="panel research-panel"><summary>未成交与退出延期原因</summary><div class="research-body research-grid">${Object.entries(data.skipped || {}).map(([reason,count]) => `<div class="research-card">${esc(reason)}：${count}</div>`).join("") || "暂无跳过记录"}</div></details>
@@ -346,6 +440,7 @@ function renderBacktest(data) {
   $("trade-search").addEventListener("input", (e) => { tradeSearch = e.target.value; renderTradeLedger(); });
   $("trade-status").addEventListener("change", (e) => { tradeStatus = e.target.value; renderTradeLedger(); });
   $("export-trades").addEventListener("click", exportTradeLedger);
+  setupFillHistory();
 }
 function openPlan(code) {
   const watch = state.watchlist.find((w) => w.code === code), plan = watch?.plan || {}, form = $("plan-form");
