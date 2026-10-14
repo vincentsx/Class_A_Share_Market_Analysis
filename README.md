@@ -2,6 +2,14 @@
 
 本地优先的股票研究工具，面向持有几天至几周的 A 股观察。每天采集行情、检查数据、分析市场和行业、筛选可解释的观察信号，并记录后续表现。
 
+## 在线展示
+
+**[打开展示网页 →](https://vincentsx.github.io/Class_A_Share_Market_Analysis/)**
+
+[最新报告](https://vincentsx.github.io/Class_A_Share_Market_Analysis/latest.html) · [午间快照](https://vincentsx.github.io/Class_A_Share_Market_Analysis/midday.html) · [收盘快照](https://vincentsx.github.io/Class_A_Share_Market_Analysis/close.html) · [日线研究与模拟持仓](https://vincentsx.github.io/Class_A_Share_Market_Analysis/evening.html)
+
+无需本地安装，手机和电脑均可查看已发布报告、历史归档，以及下载 HTML / PNG。日线报告包含信号跟踪和模拟持仓的资金概览；数据日期与估值截止时间以页面标注为准。
+
 ## 研究工作台的新功能
 
 - **完整信号存档**：`MAX_CANDIDATES`只控制优先展示数量；所有规则命中都写入报告与信号表。页面可切换完整名单，搜索会检索全部已存候选。旧版遗漏可按冻结指标严格核对后重建；重建候选单独标记、单独统计，并从模拟成交中排除，不冒充当时已经发布的信号。
