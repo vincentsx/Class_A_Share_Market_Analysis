@@ -1,6 +1,6 @@
-# 收盘之后 · A股盘后分析系统
+# 收盘之后 · A股研究与模拟交易系统
 
-本地优先的股票研究工具，面向持有几天至几周的 A 股观察。每天采集行情、检查数据、分析市场和行业、筛选可解释的观察信号，并记录后续表现。
+本地优先的 A 股研究与模拟交易工具，面向持有几天至几周的交易研究。支持午间与收盘观察、日线分析、信号跟踪、模拟买卖明细、盘中持仓估值和下一交易日模拟交易计划，帮助核对决策依据与后续结果。
 
 ## 在线展示
 
@@ -8,7 +8,7 @@
 
 [模拟持仓 · 盘中估值](https://vincentsx.github.io/Class_A_Share_Market_Analysis/portfolio.html) · [最新报告](https://vincentsx.github.io/Class_A_Share_Market_Analysis/latest.html) · [午间快照](https://vincentsx.github.io/Class_A_Share_Market_Analysis/midday.html) · [收盘快照](https://vincentsx.github.io/Class_A_Share_Market_Analysis/close.html) · [日线研究与模拟持仓](https://vincentsx.github.io/Class_A_Share_Market_Analysis/evening.html)
 
-无需本地安装，手机和电脑均可查看已发布报告、历史归档，以及下载 HTML / PNG。日线报告包含信号跟踪和模拟持仓的资金概览；数据日期与估值截止时间以页面标注为准。
+无需本地安装，手机和电脑均可查看已发布报告、历史归档，以及下载 HTML / PNG。日线报告包含下一交易日模拟交易计划、信号跟踪、模拟买卖明细和持仓资金概览；数据日期与估值截止时间以页面标注为准。
 
 ## 研究工作台的新功能
 
