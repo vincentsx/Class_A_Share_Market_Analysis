@@ -41,7 +41,7 @@ def atomic_write(path, content):
             Path(temporary).unlink()
 
 
-def daily_payload(db, settings, day=None, public=False):
+def daily_payload(db, settings, day=None, public=False, portfolio=False):
     if day:
         parse_day(day)
     data = dashboard(db, settings, day)
@@ -72,9 +72,13 @@ def daily_payload(db, settings, day=None, public=False):
     from .backtest import simulate
 
     simulation = simulate(db, settings, report["day"]) if report else None
+    if portfolio and simulation:
+        from .portfolio import value_portfolio
+
+        simulation["valuation"] = value_portfolio(db, settings, simulation)
     return {"dashboard": data, "tracking": observations, "histories": histories,
             "backtest": simulation,
-            "exported_at": now().isoformat(), "public": public}
+            "exported_at": now().isoformat(), "public": public, "portfolio": portfolio}
 
 
 def render_daily(payload, settings):
@@ -83,6 +87,7 @@ def render_daily(payload, settings):
     text = environment.get_template("index.html").render(
         source=settings.source,
         public_report=payload.get("public", False),
+        portfolio_report=payload.get("portfolio", False),
         offline=True,
         nonce=secrets.token_urlsafe(24),
         exported_at=now().strftime("%Y-%m-%d %H:%M（北京时间）"),

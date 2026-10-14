@@ -116,6 +116,7 @@ def worker(db, settings):
             stopped.wait(20)
 
     heartbeat = threading.Thread(target=pulse, daemon=True)
+    quotes = threading.Thread(target=_portfolio_loop, args=(db, settings, stopped), daemon=True)
     # The single-process worker lock is released by the OS even after a crash.
     if db.engine.dialect.name == "sqlite":
         import fcntl
@@ -141,10 +142,12 @@ def worker(db, settings):
         guard.commit()  # Session advisory lock survives; avoid an idle transaction for the worker lifetime.
     try:
         heartbeat.start()
+        quotes.start()
         _worker_loop(db, settings, stopped, activity)
     finally:
         stopped.set()
         heartbeat.join(timeout=5)
+        quotes.join(timeout=5)
         try:
             db.save_state(settings.source, "worker", {"at": now().isoformat(), "status": "stopped",
                                                       "phase": "已停止", "pid": os.getpid()})
@@ -152,6 +155,19 @@ def worker(db, settings):
                 guard.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": lock_id})
         finally:
             guard.close()
+
+
+def _portfolio_loop(db, settings, stopped):
+    """Keep quote cadence independent of lengthy report exports and site uploads."""
+    from .portfolio import portfolio_due, refresh_portfolio
+
+    while not stopped.is_set():
+        try:
+            if portfolio_due(db, settings, now()):
+                refresh_portfolio(db, settings)
+        except Exception:
+            logger.warning("盘中估值未完成，保留已保存行情并标注时效", exc_info=True)
+        stopped.wait(30)
 
 
 def _worker_loop(db, settings, stopped, activity):

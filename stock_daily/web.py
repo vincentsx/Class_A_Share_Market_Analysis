@@ -58,7 +58,10 @@ def create_app(settings=None, database=None):
     @app.get("/", response_class=HTMLResponse)
     def index(request: Request):
         return templates.TemplateResponse(
-            request=request, name="index.html", context={"source": settings.source}
+            request=request, name="index.html", context={"source": settings.source,
+                "midday_time": settings.midday_time, "schedule_time": settings.schedule_time,
+                "announcement_time": settings.announcement_time,
+                "portfolio_interval_minutes": settings.portfolio_interval_minutes}
         )
 
     @app.get("/health")
@@ -103,14 +106,19 @@ def create_app(settings=None, database=None):
                  capital: float = 100000, weight: float = .1, max_positions: int = 10,
                  holding_days: int = 10, commission_bps: float = 3, min_commission: float = 5,
                  sell_tax_bps: float = 5, transfer_bps: float = .1, slippage_bps: float = 5,
-                 participation: float = .01, split_day: str = ""):
+                 participation: float = .01, split_day: str = "", live: bool = False):
         from .backtest import Simulation, simulate
 
         try:
             config = Simulation(capital, weight, max_positions, holding_days, commission_bps, min_commission,
                                 sell_tax_bps, transfer_bps, slippage_bps, participation, strategy,
                                 rule_version, cohort, split_day)
-            return simulate(database, settings, day, config)
+            result = simulate(database, settings, day, config)
+            if live:
+                from .portfolio import value_portfolio
+
+                result["valuation"] = value_portfolio(database, settings, result)
+            return result
         except ValueError as error:
             raise HTTPException(422, str(error)) from None
 

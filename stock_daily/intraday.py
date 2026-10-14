@@ -45,9 +45,13 @@ def parse_quotes(text, expected, day, slot, captured):
                 raise ValueError("行情时间在未来")
             # Stock quotes can publish a few minutes after the last trade. Preserve
             # each vendor timestamp rather than pretending every symbol traded at 11:30.
-            minimum = "11:25" if slot == "midday" else "14:55"
+            minimum = "09:30" if slot == "portfolio" else "11:25" if slot == "midday" else "14:55"
             if timestamp.strftime("%H:%M") < minimum or (slot == "midday" and timestamp.hour >= 13):
                 raise ValueError("行情时间不属于所选时段")
+            if slot == "portfolio" and (captured - timestamp > timedelta(minutes=10)
+                                        or not ("09:30" <= timestamp.strftime("%H:%M") <= "11:30"
+                                                or "13:00" <= timestamp.strftime("%H:%M") <= "15:05")):
+                raise ValueError("盘中行情已过期或不在交易时段")
             numeric = {key: float(values[index]) for key, index in
                        (("open", 1), ("previous", 2), ("price", 3), ("high", 4), ("low", 5),
                         ("volume", 8), ("amount", 9))}
@@ -207,7 +211,7 @@ def run_snapshot(db, settings, day=None, slot="midday", feed=None, provider=None
     try:
         with db.lock(settings.source):
             if settings.source == "demo":
-                db.finish_run(identifier, "skipped", "合成示例不混入真实实时行情；20:30生成示例日线报告")
+                db.finish_run(identifier, "skipped", f"合成示例不混入真实实时行情；{settings.announcement_time}生成示例日线报告")
                 return {"status": "skipped", "day": day}
             active_provider = active_provider or make_provider(settings, db)
             calendar_start = (parse_day(day) - timedelta(days=60)).strftime("%Y%m%d")

@@ -69,7 +69,7 @@ async function load(day = selectedDay) {
       const older = data.report.day !== (OFFLINE ? new Date().toLocaleDateString("sv-SE", {timeZone:"Asia/Shanghai"}).replaceAll("-", "") : data.today);
       const recentTask = data.runs.find((r) => r.kind === "daily" && r.status !== "skipped" && r.day >= data.report.day);
       const recentFailure = recentTask?.status === "failed" ? recentTask : null;
-      const reportNotice = recentFailure ? `最近采集失败：${recentFailure.message}。当前显示 ${dateLabel(data.report.day)} 的已保存报告。` : older ? `当前显示 ${dateLabel(data.report.day)} 的历史报告，数据截止于该日。` : "";
+      const reportNotice = recentFailure ? `最近采集失败：${recentFailure.message}。当前显示 ${dateLabel(data.report.day)} 的已保存报告。` : older ? (OFFLINE?.portfolio || (!selectedDay && currentView === "backtest") ? `日线分析截至 ${dateLabel(data.report.day)}；持仓估值的行情时间见下方标注。` : `当前显示 ${dateLabel(data.report.day)} 的历史报告，数据截止于该日。`) : "";
       message([reportNotice, ...(data.report.data_notes || [])].filter(Boolean).join(" "), !!recentFailure);
       renderReport(data);
       renderWatch(data.watchlist);
@@ -148,7 +148,7 @@ function renderOperations(data) {
   $("worker-chip").textContent = labels[data.worker.status] || data.worker.status;
   $("worker-chip").className = `chip${data.worker.status === "running" ? "" : " amber"}`;
   const stages = {success:"完成", failed:"失败", running:"运行中", skipped:"跳过", not_run:"尚无记录"};
-  $("operations-content").innerHTML = `<p>状态检查 ${timeLabel(data.checked_at)} · worker心跳 ${timeLabel(data.worker.at)} · ${esc(data.worker.phase || "尚无记录；请启动或重启worker")}${OFFLINE ? " · 此处为导出时的状态" : ""}</p><p>最新日线 ${dateLabel(data.latest_daily)} · 最新快照 ${dateLabel(data.latest_snapshot?.day)} ${esc(data.latest_snapshot?.slot || "")}</p><div class="research-grid">${data.next_tasks.map((t) => `<div class="research-card"><b>${esc({midday:"午间",close:"收盘",evening:"晚间"}[t.kind])} ${timeLabel(t.at)}</b><p>${t.calendar_verified ? "已保存交易日历中的下一时段" : "下一次时段检查，交易日历待核验"}</p></div>`).join("")}</div><div class="research-grid">${data.stages.map((s) => `<div class="research-card"><b>${esc(s.label)} · ${esc(stages[s.status] || s.status)}</b><p>${timeLabel(s.started_at)} · ${esc(s.message || "")}</p></div>`).join("")}</div><p>数据库备份：${data.backup_enabled ? esc({success:"成功",failed:"失败"}[data.backup.status] || "等待首次备份") : "未启用"} · ${timeLabel(data.backup.at)} ${esc(data.backup.file || "")}</p>${data.pages.status ? `<p>公开网站：${esc(data.pages.status)} · ${timeLabel(data.pages.at)}；已触发上传不等于部署完成。</p>` : ""}`;
+  $("operations-content").innerHTML = `<p>状态检查 ${timeLabel(data.checked_at)} · worker心跳 ${timeLabel(data.worker.at)} · ${esc(data.worker.phase || "尚无记录；请启动或重启worker")}${OFFLINE ? " · 此处为导出时的状态" : ""}</p><p>最新日线 ${dateLabel(data.latest_daily)} · 最新快照 ${dateLabel(data.latest_snapshot?.day)} ${esc(data.latest_snapshot?.slot || "")}</p><div class="research-grid">${data.next_tasks.map((t) => `<div class="research-card"><b>${esc({midday:"午间",close:"收盘",evening:"晚间"}[t.kind])} ${timeLabel(t.at)}</b><p>${t.calendar_verified ? "已保存交易日历中的下一时段" : "下一次时段检查，交易日历待核验"}</p></div>`).join("")}</div><div class="research-grid">${data.stages.map((s) => `<div class="research-card"><b>${esc(s.label)} · ${esc(stages[s.status] || s.status)}</b><p>${timeLabel(s.started_at)} · ${esc(s.message || "")}</p></div>`).join("")}</div><p>数据库备份：${data.backup_enabled ? esc({success:"成功",failed:"失败"}[data.backup.status] || "等待首次备份") : "未启用"} · ${timeLabel(data.backup.at)} ${esc(data.backup.file || "")}</p><p>盘中持仓估值：每${data.portfolio?.interval_minutes || 10}分钟 · ${esc({success:"已采集",failed:"采集失败",skipped:"非交易日",running:"采集中"}[data.portfolio?.status] || "等待交易时段")} · ${timeLabel(data.portfolio?.at)}</p>${data.pages.status ? `<p>公开网站：${esc(data.pages.status)} · ${timeLabel(data.pages.at)}；已触发上传不等于部署完成。</p>` : ""}`;
 }
 function renderChanges(data) {
   if (!data) { $("daily-changes").textContent = "当前快照尚未保存变化分析。"; return; }
@@ -182,6 +182,7 @@ async function loadBacktest() {
   const form = $("backtest-form"), button = form.querySelector("button"), params = new URLSearchParams();
   for (const [k,v] of new FormData(form)) if (String(v).trim()) params.set(k,v);
   params.set("day",day);
+  if (!selectedDay && !OFFLINE) params.set("live","true");
   button.disabled = true;
   try {
     const data = await api(`/api/backtest?${params}`);
@@ -192,7 +193,22 @@ async function loadBacktest() {
   finally { if (id === backtestId) button.disabled = !!OFFLINE; }
 }
 function renderBacktest(data) {
-  const s = data.summary, curve = data.curve || [];
+  const valuation = data.valuation ? {...data.valuation} : null;
+  if (OFFLINE && valuation?.status === "available") {
+    const parts = Object.fromEntries(new Intl.DateTimeFormat("sv-SE", {timeZone:"Asia/Shanghai",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false}).formatToParts(new Date()).map((p) => [p.type,p.value]));
+    const today = `${parts.year}${parts.month}${parts.day}`, clock = `${parts.hour}:${parts.minute}`;
+    const cutoff = clock > "15:00" ? "15:00" : clock > "11:30" && clock < "13:00" ? "11:30" : clock;
+    const expectedAt = new Date(`${parts.year}-${parts.month}-${parts.day}T${cutoff}:00+08:00`).getTime();
+    if (today !== valuation.day || expectedAt - new Date(valuation.quote_start).getTime() > (valuation.interval_minutes + 5) * 60000) {
+      valuation.status = "stale";
+      valuation.message = "行情已过期，显示最后保存的盘中估值。" + valuation.message;
+    }
+  }
+  const live = valuation?.summary;
+  const s = live || data.summary, curve = [...(data.curve || [])];
+  const positions = live ? valuation.positions : data.positions || [];
+  if (live) curve.push({day:valuation.day,equity:s.equity,cash:s.available_cash,return:s.return,benchmark_return:s.benchmark_return});
+  const valuationNotice = valuation ? `<div class="notice${valuation.status === "stale" || valuation.status === "unavailable" ? " error" : ""}"><b>${live ? "盘中持仓估值" : "日线账户估值"}</b><span>${esc(valuation.message)}${live ? ` 行情 ${timeLabel(valuation.quote_start)}～${timeLabel(valuation.quote_end)} · 采集 ${timeLabel(valuation.captured_at)}` : ""} · 交易时段每${valuation.interval_minutes}分钟采集${OFFLINE ? " · 公开页面需等待网站部署更新" : ""}</span></div>` : "";
   const p = data.parameters || {};
   const last = curve[curve.length - 1];
   const initial = s.initial_capital ?? p.capital ?? null;
@@ -211,9 +227,9 @@ function renderBacktest(data) {
   if (curve.length > 1) {
     const values = curve.flatMap((r) => [r.return,r.benchmark_return ?? 0]), low = Math.min(...values), span = Math.max(...values) - low || 1;
     const points = (key) => curve.map((r,i) => `${num(20 + i/(curve.length-1)*560)},${num(140 - ((r[key] ?? 0)-low)/span*110)}`).join(" ");
-    chart = `<svg class="price-chart" viewBox="0 0 600 165" role="img" aria-label="模拟组合与沪深300累计变化"><polyline class="chart-line" points="${points("return")}"/><polyline fill="none" stroke="#b18c54" stroke-width="2" points="${points("benchmark_return")}"/></svg><p class="muted">绿色：模拟组合 · 棕色：沪深300 · ${dateLabel(curve[0].day)} → ${dateLabel(curve[curve.length-1].day)}</p>`;
+    chart = `<svg class="price-chart" viewBox="0 0 600 165" role="img" aria-label="模拟组合与沪深300累计变化"><polyline class="chart-line" points="${points("return")}"/><polyline fill="none" stroke="#b18c54" stroke-width="2" points="${points("benchmark_return")}"/></svg><p class="muted">绿色：模拟组合 · 棕色：沪深300 · ${dateLabel(curve[0].day)} → ${dateLabel(curve[curve.length-1].day)}${live ? " · 最后一点为所标时点的盘中估值" : ""}</p>`;
   }
-  $("backtest-output").innerHTML = `${data.stop ? `<div class="notice error">${esc(data.stop.reason)} · ${dateLabel(data.stop.day)}；净值仅计算至 ${dateLabel(s.through)}</div>` : ""}${accountCards}<div class="tracking-grid"><div class="tracking-card"><h3>模拟组合累计变化</h3><div class="metric-value">${pct(s.return)}</div><p>沪深300同期 ${pct(s.benchmark_return)}</p></div><div class="tracking-card"><h3>组合最大回撤</h3><div class="metric-value">${pct(s.max_drawdown)}</div><p>闭合交易 ${s.closed_trades || 0} / 未平仓 ${s.open_positions || 0}</p></div><div class="tracking-card"><h3>累计模拟费用</h3><div class="metric-value">${num(s.fees)} 元</div><p>未平仓费用只含已发生的入场费用</p></div></div>${chart}<p class="muted">${esc(data.method)}</p><p class="muted">参数：${esc(parameterText)}${OFFLINE ? " · 离线快照固定参数，需在本地服务中修改" : ""}</p><div class="research-grid">${Object.entries(data.skipped || {}).map(([reason,count]) => `<div class="research-card">${esc(reason)}：${count}</div>`).join("")}</div>${(data.periods || []).map((p) => `<p>${esc(p.label)} ${dateLabel(p.from)} → ${dateLabel(p.to)}：${pct(p.return)}</p>`).join("")}<details class="panel research-panel"><summary>模拟成交明细 · ${(data.trades || []).length}笔</summary><div class="table-wrap"><table><thead><tr><th>股票</th><th>入场 / 退出</th><th>股数 / 费用</th><th>扣费变化</th><th>退出原因</th></tr></thead><tbody>${(data.trades || []).map((t) => `<tr><td>${esc(t.name)}<small>${esc(t.code)} · ${esc(t.strategy)}</small></td><td>${dateLabel(t.entry_day)} / ${dateLabel(t.exit_day)}<small>${num(t.entry_price)} / ${num(t.exit_price)}</small></td><td>${t.shares} / ${num(t.fees)}元</td><td>${pct(t.net_return)}</td><td>${esc(t.exit_reason)}</td></tr>`).join("") || emptyRow("暂无已完成交易；查看上方跳过原因或继续积累行情",5)}</tbody></table></div></details><details class="panel research-panel"><summary>当前模拟持仓 · ${(data.positions || []).length}只</summary>${(data.positions || []).map((p) => `<p class="research-body">${esc(p.name)} ${esc(p.code)} · ${p.shares}股 · 入场 ${dateLabel(p.entry_day)} · 最近估值 ${num(p.mark)}元${p.exit_due ? ` · ${esc(p.exit_due)}` : ""}</p>`).join("")}</details>`;
+  $("backtest-output").innerHTML = `${valuationNotice}${data.stop ? `<div class="notice error">${esc(data.stop.reason)} · ${dateLabel(data.stop.day)}；净值仅计算至 ${dateLabel(s.through)}</div>` : ""}${accountCards}<div class="tracking-grid"><div class="tracking-card"><h3>模拟组合累计变化</h3><div class="metric-value">${pct(s.return)}</div><p>沪深300同期 ${pct(s.benchmark_return)}</p></div><div class="tracking-card"><h3>日线组合最大回撤</h3><div class="metric-value">${pct(s.max_drawdown)}</div><p>闭合交易 ${s.closed_trades || 0} / 未平仓 ${s.open_positions || 0}</p></div><div class="tracking-card"><h3>累计模拟费用</h3><div class="metric-value">${num(s.fees)} 元</div><p>未平仓费用只含已发生的入场费用</p></div></div>${chart}<p class="muted">${esc(data.method)}</p><p class="muted">参数：${esc(parameterText)}${OFFLINE ? " · 离线快照固定参数，需在本地服务中修改" : ""}</p><div class="research-grid">${Object.entries(data.skipped || {}).map(([reason,count]) => `<div class="research-card">${esc(reason)}：${count}</div>`).join("")}</div>${(data.periods || []).map((p) => `<p>${esc(p.label)} ${dateLabel(p.from)} → ${dateLabel(p.to)}：${pct(p.return)}</p>`).join("")}<details class="panel research-panel"><summary>模拟成交明细 · ${(data.trades || []).length}笔</summary><div class="table-wrap"><table><thead><tr><th>股票</th><th>入场 / 退出</th><th>股数 / 费用</th><th>扣费变化</th><th>退出原因</th></tr></thead><tbody>${(data.trades || []).map((t) => `<tr><td>${esc(t.name)}<small>${esc(t.code)} · ${esc(t.strategy)}</small></td><td>${dateLabel(t.entry_day)} / ${dateLabel(t.exit_day)}<small>${num(t.entry_price)} / ${num(t.exit_price)}</small></td><td>${t.shares} / ${num(t.fees)}元</td><td>${pct(t.net_return)}</td><td>${esc(t.exit_reason)}</td></tr>`).join("") || emptyRow("暂无已完成交易；查看上方跳过原因或继续积累行情",5)}</tbody></table></div></details><details class="panel research-panel"><summary>当前模拟持仓 · ${positions.length}只</summary>${positions.map((p) => `<p class="research-body">${esc(p.name)} ${esc(p.code)} · ${p.shares}股 · 入场 ${dateLabel(p.entry_day)} · 最近估值 ${num(p.mark)}元${p.quote_time ? ` · 行情 ${timeLabel(p.quote_time)}` : ""}${p.exit_due ? ` · ${esc(p.exit_due)}` : ""}</p>`).join("")}</details>`;
 }
 function openPlan(code) {
   const watch = state.watchlist.find((w) => w.code === code), plan = watch?.plan || {}, form = $("plan-form");
@@ -286,7 +302,7 @@ async function loadTracking() {
 }
 function switchView(view) {
   currentView = view;
-  const text = {overview:["每日复盘","把今天的市场，看清楚。","市场广度、行业强弱与值得跟踪的变化。"],watch:["我的自选","持续关注，你在意的变化。","趋势检查与公告提醒，保留每一次观察的依据。"],tracking:["信号跟踪","让判断，经得起时间检验。","记录信号发布后的变化，逐步积累真实的观察样本。"],backtest:["模拟回测","把成交约束放进研究。","资金曲线、费用与无法成交的情形都留下记录。"]}[view];
+  const text = {overview:["每日复盘","把今天的市场，看清楚。","市场广度、行业强弱与值得跟踪的变化。"],watch:["我的自选","持续关注，你在意的变化。","趋势检查与公告提醒，保留每一次观察的依据。"],tracking:["信号跟踪","让判断，经得起时间检验。","记录信号发布后的变化，逐步积累真实的观察样本。"],backtest:["模拟持仓","查看持仓与资金变化。","盘中每10分钟更新已确认持仓估值，历史回测按日线核验。"]}[view];
   $("breadcrumb").textContent = text[0]; $("page-title").textContent = text[1]; $("subtitle").textContent = text[2];
   document.querySelectorAll(".nav-item").forEach((b) => b.classList.toggle("active",b.dataset.view===view));
   document.querySelectorAll(".view").forEach((s) => s.hidden = s.id!==`view-${view}`);
@@ -315,7 +331,11 @@ $("watch-table").addEventListener("click",async (e) => {
   if (edit) { openPlan(edit.dataset.code); return; }
   const b=e.target.closest(".remove-watch");if(!b)return;const key=window.prompt(`移除 ${b.dataset.code}：请输入 APP_API_KEY`);if(!key)return;try{await api(`/api/watchlist/${b.dataset.code}`,{method:"DELETE",headers:{Authorization:`Bearer ${key}`}});await load();}catch(error){message(error.message,true);}
 });
-load();
+load().then(() => { if (OFFLINE?.portfolio) switchView("backtest"); });
 setInterval(() => {
   if (!OFFLINE && state && !document.hidden && !document.querySelector("dialog[open]") && !$("refresh").disabled && !$("backtest-form").querySelector("button").disabled) load();
 }, 30000);
+
+if (OFFLINE?.portfolio && OFFLINE.public && /^https?:$/.test(location.protocol)) {
+  setInterval(() => { if (!document.hidden) location.replace(new URL("../portfolio.html", location.href)); }, 600000);
+}

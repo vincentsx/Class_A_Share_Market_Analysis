@@ -85,7 +85,7 @@ def health_view(db, settings, current=None):
         "stopped" if heartbeat.get("status") == "stopped" else "stale" if age is not None else "unknown")
     stages = []
     for kind, label in [("daily", "日线采集"), ("midday", "午间快照"), ("close", "收盘快照"),
-                        ("evening", "晚间分析与导出"), ("export", "HTML / PNG导出"),
+                        ("evening", "日线分析与导出"), ("valuation", "盘中持仓估值"), ("export", "HTML / PNG导出"),
                         ("email", "邮件发送"), ("pages", "公开网站发布")]:
         records = db.rows(select(runs).where(runs.c.source == settings.source, runs.c.kind == kind)
                           .order_by(runs.c.started_at.desc()).limit(1))
@@ -122,4 +122,6 @@ def health_view(db, settings, current=None):
             "latest_daily": latest_daily[0]["day"] if latest_daily else None,
             "latest_snapshot": latest_snapshot[0] if latest_snapshot else None,
             "next_tasks": next_tasks, "stages": stages, "backup": state(db, settings, "backup"),
-            "backup_enabled": settings.backup_enabled, "pages": pages}
+            "backup_enabled": settings.backup_enabled, "pages": pages,
+            "portfolio": {**state(db, settings, "portfolio_refresh"),
+                          "interval_minutes": settings.portfolio_interval_minutes}}

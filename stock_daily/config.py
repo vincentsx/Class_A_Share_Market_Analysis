@@ -30,7 +30,8 @@ class Settings:
     api_key: str = ""
     midday_time: str = "11:35"
     schedule_time: str = "15:05"
-    announcement_time: str = "20:30"
+    announcement_time: str = "18:30"
+    portfolio_interval_minutes: int = 10
     history_sessions: int = 100
     min_amount: float = 50_000_000
     min_coverage: float = 0.98
@@ -77,7 +78,8 @@ class Settings:
             api_key=os.getenv("APP_API_KEY", ""),
             midday_time=os.getenv("MIDDAY_TIME", "11:35"),
             schedule_time=os.getenv("SCHEDULE_TIME", "15:05"),
-            announcement_time=os.getenv("ANNOUNCEMENT_TIME", "20:30"),
+            announcement_time=os.getenv("ANNOUNCEMENT_TIME", cls.announcement_time),
+            portfolio_interval_minutes=int(os.getenv("PORTFOLIO_INTERVAL_MINUTES", "10")),
             history_sessions=int(os.getenv("HISTORY_SESSIONS", "100")),
             min_amount=float(os.getenv("MIN_AMOUNT_YUAN", "50000000")),
             min_coverage=float(os.getenv("MIN_COVERAGE", "0.98")),
@@ -116,6 +118,8 @@ class Settings:
             raise ValueError("HISTORY_SESSIONS 至少为65，MIN_COVERAGE 范围为 (0,1]")
         if config.max_candidates < 1 or config.min_amount < 0 or config.request_interval < 0:
             raise ValueError("候选数量、成交额或请求间隔配置无效")
+        if not 5 <= config.portfolio_interval_minutes <= 60:
+            raise ValueError("PORTFOLIO_INTERVAL_MINUTES需为5～60分钟")
         for value in (config.midday_time, config.schedule_time, config.announcement_time):
             datetime.strptime(value, "%H:%M")
         if not "11:30" <= config.midday_time < "13:00":

@@ -6,7 +6,7 @@
 
 **[打开展示网页 →](https://vincentsx.github.io/Class_A_Share_Market_Analysis/)**
 
-[最新报告](https://vincentsx.github.io/Class_A_Share_Market_Analysis/latest.html) · [午间快照](https://vincentsx.github.io/Class_A_Share_Market_Analysis/midday.html) · [收盘快照](https://vincentsx.github.io/Class_A_Share_Market_Analysis/close.html) · [日线研究与模拟持仓](https://vincentsx.github.io/Class_A_Share_Market_Analysis/evening.html)
+[模拟持仓 · 盘中估值](https://vincentsx.github.io/Class_A_Share_Market_Analysis/portfolio.html) · [最新报告](https://vincentsx.github.io/Class_A_Share_Market_Analysis/latest.html) · [午间快照](https://vincentsx.github.io/Class_A_Share_Market_Analysis/midday.html) · [收盘快照](https://vincentsx.github.io/Class_A_Share_Market_Analysis/close.html) · [日线研究与模拟持仓](https://vincentsx.github.io/Class_A_Share_Market_Analysis/evening.html)
 
 无需本地安装，手机和电脑均可查看已发布报告、历史归档，以及下载 HTML / PNG。日线报告包含信号跟踪和模拟持仓的资金概览；数据日期与估值截止时间以页面标注为准。
 
@@ -74,7 +74,7 @@ bash scripts/run_local.sh
 
 服务已经运行时，直接打开网页查看即可。电脑重启或服务停止后，再执行上述启动命令；请保持启动终端开启，避免重复启动网页或 worker。启动脚本不会自动设置开机启动。
 
-电脑需要开机、不休眠，并能联网。默认按北京时间 **11:35、15:05、20:30** 执行三个独立任务，成功后自动导出 HTML 与 PNG，并更新 `data/html/baostock-latest.html` 和 `data/html/baostock-latest.png`。保留 `.env` 和 `data/` 目录：已有行情和复权记录会复用，已经完成历史初始化的电脑无需从头采集。
+电脑需要开机、不休眠，并能联网。默认按北京时间 **11:35、15:05、18:30** 执行三个独立任务，成功后自动导出 HTML 与 PNG，并更新 `data/html/baostock-latest.html` 和 `data/html/baostock-latest.png`。保留 `.env` 和 `data/` 目录：已有行情和复权记录会复用，已经完成历史初始化的电脑无需从头采集。
 
 如需收盘后手动更新一次，另开终端执行；默认分析北京时间当天，指定日期和故障处理见“本地真实运行一次”：
 
@@ -104,7 +104,7 @@ cp .env.example .env
 | --- | --- | --- |
 | 11:35 | 免费新浪午间报价；追踪行业热点、午间量价异动及自选/既有信号变化 | `baostock-20261012-1135.html`、`.png` |
 | 15:05 | 免费新浪收盘报价；追踪热点延续、全天放缩量、午后走强/降温及风险异动 | `baostock-20261012-1505.html`、`.png` |
-| 20:30 | BaoStock完整日线、复权和历史指标分析，公告按配置核验，发布收盘规则信号 | `baostock-20261012-2030.html`、`.png`，同时保存 `baostock-20261012.html/.png` |
+| 18:30 | BaoStock完整日线、复权和历史指标分析，公告按配置核验，发布收盘规则信号 | `baostock-20261012-1830.html`、`.png`，同时保存 `baostock-20261012.html/.png` |
 
 三次成功导出后均更新 `data/html/baostock-latest.html` 和 `baostock-latest.png`；带日期及时分的文件分别保留。任务时间是**开始采集时间**，全量采集、分析和图片渲染完成后才更新文件。网页上方提供最新HTML和PNG入口；下方日线工作台继续显示已核验的日线报告及其真实日期。
 
@@ -123,14 +123,15 @@ cp .env.example .env
 
 旧版已保存快照可用 `export-snapshot --date YYYYMMDD --slot midday` 或 `--slot close` 重导出为新版报告，无需联网重采；保留原始报价、采集时间和观察名单，参考价格窗口仍只取报告日之前的数据。新版采集会保存当时的完整分析，之后重导出直接复用，不随后续行情变化。
 
-午间累计成交量不会外推成全天成交量，不用于放量突破判定。两次实时快照保存到独立表，不写入日线行情、正式信号或5/10/20日观察统计。20:30的BaoStock日线需另行核验；接口失败会记录失败，保留先前成功快照。缓存基础信息在报告当日已采集时，晚间任务可使用经过校验的个股历史恢复路径；否则使用常规接口重新获取范围，不绕过基础信息日期要求。合成demo模式跳过真实报价快照，仅运行晚间合成日线任务。
+午间累计成交量不会外推成全天成交量，不用于放量突破判定。两次实时快照保存到独立表，不写入日线行情、正式信号或5/10/20日观察统计。18:30的BaoStock日线需另行核验；接口失败会记录失败，保留先前成功快照。缓存基础信息在报告当日已采集时，晚间任务可使用经过校验的个股历史恢复路径；否则使用常规接口重新获取范围，不绕过基础信息日期要求。合成demo模式跳过真实报价快照，仅运行晚间合成日线任务。
 
 现有 `.env` 需要使用以下配置，修改后重启网页和worker（此电脑的配置已更新）：
 
 ```dotenv
 MIDDAY_TIME=11:35
 SCHEDULE_TIME=15:05
-ANNOUNCEMENT_TIME=20:30
+ANNOUNCEMENT_TIME=18:30
+PORTFOLIO_INTERVAL_MINUTES=10
 EXPORT_HTML=true
 EXPORT_PNG=true
 HTML_REPORT_DIR=./data/html
@@ -154,7 +155,7 @@ Docker镜像也包含Chromium及中文字体。初次安装浏览器需要联网
 .venv/bin/python -m stock_daily snapshot --slot midday
 # 当天收盘后执行
 .venv/bin/python -m stock_daily snapshot --slot close
-# 数据源已提供完整日线后执行，通常留给20:30定时任务
+# 数据源已提供完整日线后执行，通常留给18:30定时任务
 .venv/bin/python -m stock_daily evening
 # 将最新HTML重新生成同名PNG，不重新请求行情
 .venv/bin/python -m stock_daily export-png
@@ -202,7 +203,7 @@ HTML保存最多200条优先快讯供筛选与搜索，浏览器默认展示前8
 
 ## Gmail自动发送报告邮件
 
-邮件功能默认关闭。配置完成并重启worker后，11:35、15:05、20:30任务成功生成HTML和PNG时，各自排入一封报告邮件，再由worker发送。任务时间是开始采集时间，邮件会在采集与导出完成后发送。分析或导出失败不会发送尚未完成的报告；邮箱配置、认证或连接失败不会使已经生成的分析结果失效。
+邮件功能默认关闭。配置完成并重启worker后，11:35、15:05、18:30任务成功生成HTML和PNG时，各自排入一封报告邮件，再由worker发送。任务时间是开始采集时间，邮件会在采集与导出完成后发送。分析或导出失败不会发送尚未完成的报告；邮箱配置、认证或连接失败不会使已经生成的分析结果失效。
 
 ### 配置 Gmail
 
@@ -353,7 +354,7 @@ FREE_REQUEST_TIMEOUT=90
 
 大接口比单只股票接口慢。每个SDK操作有总超时，失败重连最多3次；可将 `FREE_REQUEST_TIMEOUT` 调至300秒以内。超时、空行情、日期不符、分页失败或覆盖不足都不会发布报告，也不会自动改用示例数据。免费接口不承诺可用性或全市场完整性，具体运行结果以任务记录为准。
 
-AKShare的 `stock_notice_report` 获取指定日期的公告标题、链接和日期；仅采集当前报告日公告，历史行情补齐不逐日抓取公告。SDK操作也受总超时限制。接口没有精确发布时间，因此本系统留空该字段。启用后20:30核验；接口不可用显示“公告未核验”，不会宣称没有风险。标题提示不读取正文，也不判断利好利空。
+AKShare的 `stock_notice_report` 获取指定日期的公告标题、链接和日期；仅采集当前报告日公告，历史行情补齐不逐日抓取公告。SDK操作也受总超时限制。接口没有精确发布时间，因此本系统留空该字段。启用后18:30核验；接口不可用显示“公告未核验”，不会宣称没有风险。标题提示不读取正文，也不判断利好利空。
 
 只读连通性检查不会写入行情或报告：
 
@@ -387,7 +388,7 @@ ENABLE_ANNOUNCEMENTS=false
 
 真实数据模式需要 `stock_basic`、`trade_cal`、`daily`、`adj_factor`、`daily_basic`、`suspend_d` 和沪深300的 `index_daily` 权限。按账号确认实际权限和频率；接口异常不自动切换示例数据。默认 HTTPS，不自动降级为 HTTP。
 
-公告使用 `anns_d`，需要单独权限。启用 `ENABLE_ANNOUNCEMENTS=true` 后会采集公告标题、日期、链接和可用的发布时间；未启用或接口失败时显示“公告未核验”。20:30补查公告只更新公告视图，保留原信号发布时的依据。此版本只按标题关键词提示，没有读取 PDF 正文，不判断事件的利好或利空方向。
+公告使用 `anns_d`，需要单独权限。启用 `ENABLE_ANNOUNCEMENTS=true` 后会采集公告标题、日期、链接和可用的发布时间；未启用或接口失败时显示“公告未核验”。18:30补查公告只更新公告视图，保留原信号发布时的依据。此版本只按标题关键词提示，没有读取 PDF 正文，不判断事件的利好或利空方向。
 
 接口参考：[日线](https://tushare.pro/document/2?doc_id=27)、[每日指标](https://tushare.pro/document/2?doc_id=32)、[股票列表](https://tushare.pro/document/2?doc_id=25)、[交易日历](https://tushare.pro/document/2?doc_id=26)、[停复牌](https://tushare.pro/document/2?doc_id=214)、[公告](https://tushare.pro/document/2?doc_id=176)、[HTTP API](https://tushare.pro/document/1?doc_id=40)。使用和展示数据时遵循数据提供方的授权范围。
 
@@ -440,7 +441,7 @@ Tushare官方权限表列出的基础非复权日线门槛为120积分，100积�
 
 当天行情、元信息、报告和信号在同一数据库事务中发布；失败保留之前的已发布结果，成功采集的历史可用于断点续采。示例和真实数据按 `source` 完全隔离。自选股列表共用，切换数据源后会重新分析，示例添加的代码可自行移除。
 
-worker 使用 `Asia/Shanghai`，默认11:35午间快照、15:05收盘快照、20:30完整日线分析及公告核验。三个时段的成功记录独立保存。启动时补执行当前时段已到时间且未成功的任务；午间仅在13:00之前补采，收盘快照仅在20:30之前补采，避免用下午行情伪造午间数据。失败在时段内每15分钟重试，每个时段每天最多4次。非交易日按交易日历跳过。**worker 停止时没有调度；电脑需开机且进程运行。** 停机数日后的下一次运行会补齐计算窗口内的行情，但不会自动生成停机期间的每一天报告。
+worker 使用 `Asia/Shanghai`，默认11:35午间快照、15:05收盘快照、18:30完整日线分析及公告核验。三个时段的成功记录独立保存。启动时补执行当前时段已到时间且未成功的任务；午间仅在13:00之前补采，收盘快照仅在18:30之前补采，避免用下午行情伪造午间数据。失败在时段内每15分钟重试，每个时段每天最多4次。非交易日按交易日历跳过。**worker 停止时没有调度；电脑需开机且进程运行。** 停机数日后的下一次运行会补齐计算窗口内的行情，但不会自动生成停机期间的每一天报告。
 
 数据库任务锁避免重复写入；进程异常退出后锁最长6小时过期。可配置 `ALERT_WEBHOOK`，任务失败后向该地址 POST 通用 JSON；默认关闭，失败也会记录在页面中。
 
@@ -453,7 +454,7 @@ worker 使用 `Asia/Shanghai`，默认11:35午间快照、15:05收盘快照、20
 .venv/bin/python -m stock_daily track
 ```
 
-只读 API：`/health`、`/api/dashboard?day=YYYYMMDD`、`/api/report/{day}`、`/api/report/{day}/download`、`/api/stocks/{code}/history?day=YYYYMMDD`、`/api/tracking?day=YYYYMMDD`、`/api/watchlist`、`/api/operations`、`/api/backtest?day=YYYYMMDD`。自选股 POST/DELETE、观察计划 PUT `/api/watchlist/{code}/plan`、AI摘要 POST `/api/evidence/{day}/summary`要求 `Authorization: Bearer APP_API_KEY`。网页不存储管理密钥。
+只读 API（`/api/backtest?live=true`附加盘中估值，默认历史回测保持日线口径）：`/health`、`/api/dashboard?day=YYYYMMDD`、`/api/report/{day}`、`/api/report/{day}/download`、`/api/stocks/{code}/history?day=YYYYMMDD`、`/api/tracking?day=YYYYMMDD`、`/api/watchlist`、`/api/operations`、`/api/backtest?day=YYYYMMDD`。自选股 POST/DELETE、观察计划 PUT `/api/watchlist/{code}/plan`、AI摘要 POST `/api/evidence/{day}/summary`要求 `Authorization: Bearer APP_API_KEY`。网页不存储管理密钥。
 
 ## GitHub Pages：固定公网报告链接
 
@@ -490,7 +491,7 @@ gh run list --repo vincentsx/Class_A_Share_Market_Analysis --workflow pages.yml 
 gh run watch 运行ID --repo vincentsx/Class_A_Share_Market_Analysis --exit-status
 ```
 
-默认公网地址为 `https://vincentsx.github.io/Class_A_Share_Market_Analysis/`。固定入口为 `latest.html`、`midday.html`、`close.html`、`evening.html`；尚未生成的时段不创建入口。首次部署完成前可能返回404。绑定自定义域名后，以Actions部署结果中的网址为准。
+默认公网地址为 `https://vincentsx.github.io/Class_A_Share_Market_Analysis/`。固定入口为 `portfolio.html`、`latest.html`、`midday.html`、`close.html`、`evening.html`；尚未生成的时段不创建入口。首次部署完成前可能返回404。绑定自定义域名后，以Actions部署结果中的网址为准。
 
 ### 持续自动更新
 
@@ -530,6 +531,16 @@ docker compose -f compose.yaml -f deploy/compose.postgres.yaml exec app python -
 ```
 
 SQLite和PostgreSQL数据库不会自动迁移数据。建议对持久数据库定期备份。SQLite备份用 Python `sqlite3.Connection.backup()` 或 SQLite `.backup`，不要在任务运行中只复制主DB文件而忽略WAL。PostgreSQL使用 `pg_dump`。
+
+## 模拟持仓的盘中更新
+
+交易日09:30～11:30、13:00～15:00，worker默认每10分钟采集模拟信号涉及股票与沪深300的新浪行情，15:05再采集一次收盘报价。午休、夜间、周末及交易日历核验为休市的日期不采集。报价独立缓存，不改写日线、信号、历史收益曲线或成交记录，不增加邮件发送次数。修改间隔可设置 `PORTFOLIO_INTERVAL_MINUTES=10`。
+
+本地网页选择“跟随最新报告”并打开“模拟持仓”，即可查看已确认持仓的盘中市值、总资产、盈亏和报价时间。现金、股数和费用来自最近完整日线核验的模拟账户；新入场或退出仍待完整日线确认，盘中估值不是新的模拟成交。最大回撤和前后段统计仍按日线口径。选择具体历史日期时只显示该日的日线回测，避免把今天的行情混入历史报告。
+
+公开网站新增 `portfolio.html` 入口，保存最新持仓估值的HTML和PNG，和日线历史报告分开。worker采集后按现有10分钟发布检查上传，页面每10分钟重载固定入口；GitHub Actions部署与浏览器缓存可能带来额外延迟，因此不是逐笔实时行情。下载到本地的HTML仍是固定快照。日线任务默认北京时间18:30开始，尚未获得完整日线时仍按15分钟间隔、最多4次重试。
+
+持仓报价缺失、昨收尺度与日线不一致（可能除权）或中间缺少交易日日线时，不发布混合或补造的盘中净值，显示最近完整日线账户并说明原因。worker停止、网络故障或报价过期时显示保存的估值及过期提示。电脑需开机、不休眠且联网。
 
 ## 开发和验证
 

@@ -24,7 +24,7 @@ from .providers import DataError
 logger = logging.getLogger(__name__)
 VERSION = "public-pages-v1"
 RELEASE = "pages-report-data"
-SLOTS = {"midday": "午间观察", "close": "收盘观察", "evening": "日线分析"}
+SLOTS = {"portfolio": "模拟持仓 · 盘中估值", "midday": "午间观察", "close": "收盘观察", "evening": "日线分析"}
 
 
 def digest(content):
@@ -89,7 +89,17 @@ def export_pages(db, settings, output="data/pages", render_image=None):
         report = payload["dashboard"]["report"]
         entries.append({"day": record["day"], "slot": "evening", "payload": payload,
                         "data_at": report.get("generated_at", ""), "news_at": ""})
-    entries.sort(key=lambda r: (r["day"], {"midday": 0, "close": 1, "evening": 2}[r["slot"]]), reverse=True)
+    if days:
+        payload = daily_payload(db, settings, days[0]["day"], public=True, portfolio=True)
+        valuation = payload["backtest"].get("valuation", {})
+        report = payload["dashboard"]["report"]
+        portfolio_day = valuation.get("day", report["day"])
+        if portfolio_day not in dates:
+            dates = sorted({portfolio_day, *dates}, reverse=True)
+        entries.append({"day": portfolio_day, "slot": "portfolio", "payload": payload,
+                        "data_at": valuation.get("captured_at", report.get("generated_at", "")), "news_at": ""})
+    entries.sort(key=lambda r: (r["day"], r["data_at"], {"midday": 0, "close": 1, "evening": 2,
+                                                       "portfolio": 3}[r["slot"]]), reverse=True)
     if not entries:
         raise DataError("没有已发布报告；公开网站不会使用空页面或合成行情代替真实数据")
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -120,7 +130,7 @@ def export_pages(db, settings, output="data/pages", render_image=None):
                     shutil.copyfile(destination / file, stage / file)
             else:
                 logger.info("生成公开报告：%s %s", entry["day"], SLOTS[entry["slot"]])
-                html = (render_daily(payload, settings) if entry["slot"] == "evening"
+                html = (render_daily(payload, settings) if entry["slot"] in {"evening", "portfolio"}
                         else render_snapshot(payload, settings))
                 atomic_write(stage / name, html)
                 renderer(stage / name)
@@ -163,7 +173,8 @@ def export_pages(db, settings, output="data/pages", render_image=None):
 
 def gh(*arguments, check=True):
     try:
-        result = subprocess.run(["gh", *arguments], capture_output=True, text=True, timeout=180)
+        timeout = 420 if arguments[:2] == ("release", "upload") else 180
+        result = subprocess.run(["gh", *arguments], capture_output=True, text=True, timeout=timeout)
     except (OSError, subprocess.TimeoutExpired):
         raise DataError("GitHub命令不可用或超时；请检查gh安装、登录及网络") from None
     if check and result.returncode:

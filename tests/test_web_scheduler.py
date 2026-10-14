@@ -77,13 +77,13 @@ def test_three_slots_complete_independently_and_no_late_midday_capture(settings,
     identifier = db.start_run('demo', '20261009', 'midday')
     db.finish_run(identifier, 'success', '午间完成')
     current = datetime(2026, 10, 9, 15, 5, tzinfo=SHANGHAI)
-    assert due(db, settings, current, 'close', '15:05', '20:30')
+    assert due(db, settings, current, 'close', '15:05', '18:30')
     assert not due(db, settings, current, 'midday', '11:35', '13:00')
     identifier = db.start_run('demo', '20261009', 'close')
     db.finish_run(identifier, 'success', '收盘完成')
-    current = current.replace(hour=20, minute=30)
-    assert due(db, settings, current, 'evening', '20:30')
-    assert not due(db, settings, current, 'close', '15:05', '20:30')
+    current = current.replace(hour=18, minute=30)
+    assert due(db, settings, current, 'evening', '18:30')
+    assert not due(db, settings, current, 'close', '15:05', '18:30')
 
 
 def test_artifact_route_is_source_scoped_and_preserves_nonce_csp(populated, tmp_path):
@@ -115,7 +115,7 @@ def test_evening_reuses_published_report_and_retries_artifact_export(populated, 
     monkeypatch.setattr('stock_daily.scheduler.run_daily', unexpected_daily)
     result = run_evening(db, settings, '20261009')
     assert result['status'] == 'success'
-    assert (tmp_path / 'demo-20261009-2030.html').read_bytes() == (tmp_path / 'demo-latest.html').read_bytes()
+    assert (tmp_path / 'demo-20261009-1830.html').read_bytes() == (tmp_path / 'demo-latest.html').read_bytes()
     assert db.rows(select(runs).where(runs.c.kind == 'evening'))[-1]['status'] == 'success'
 
 
