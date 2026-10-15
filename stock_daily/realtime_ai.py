@@ -38,7 +38,7 @@ def analyze(settings, report):
     if trading:
         instructions += ("同时输出trade_policy模拟交易意见。market_action为normal正常/reduce减半风险/pause暂停新增，"
             "附text与evidence_ids。stocks必须完整覆盖decision_universe且每股恰好一次，"
-            "每项code/action(support支持买入/wait等待/exit退出)/score(0至100整数)/text/evidence_ids。"
+            "每项code/action(support支持买入或继续持有/wait等待/exit退出)/score(0至100整数)/text/evidence_ids，个股text不超过45字。"
             "每股引用必须包括该股stock证据。未知报价、未核实风险、来源故障倾向wait；不发明标的、价格或数量。"
             "评分是研究判断强度，不是胜率。只有量价确认和全部风控允许后才可能模拟成交，意见不能覆盖风控。")
     aliases = {f'E{i:03d}': card['id'] for i, card in enumerate(report['evidence'], 1)}
@@ -60,7 +60,7 @@ def analyze(settings, report):
             "instructions": instructions, "input": content, "text": {"format": {
                 "type": "json_schema", "name": "intraday_analysis", "strict": True, "schema": schema}}}
     try:
-        with httpx.Client(timeout=httpx.Timeout(75, connect=10), follow_redirects=False) as client:
+        with httpx.Client(timeout=httpx.Timeout(180 if trading else 75, connect=10), follow_redirects=False) as client:
             for attempt in range(3):
                 try:
                     response = client.post(settings.ai_api_base_url.rstrip("/") + path, json=request,
