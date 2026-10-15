@@ -65,5 +65,9 @@
     for(let parent=target.parentElement;parent;parent=parent.parentElement)if(parent.tagName==="DETAILS")parent.open=true;
     target.focus({preventScroll:true});
   });
-  window.GuanshiEvidence={describe,references,render};
+  const remember = root => new Set([...root.querySelectorAll('.analysis-sources[open]')].map(e=>e.dataset.evidenceKey).filter(Boolean));
+  const restore = (root,keys) => root.querySelectorAll('.analysis-sources[data-evidence-key]').forEach(e=>{
+    if(keys.has(e.dataset.evidenceKey))e.open=true;
+  });
+  window.GuanshiEvidence={describe,references,render,remember,restore};
 })();

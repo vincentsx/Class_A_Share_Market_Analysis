@@ -177,11 +177,11 @@ function analysisMarkup(data, title = "AI市场研判", prefix = "report-ai") {
   const sections = {overview:"市场研判",focus:"关注方向",risks:"主要风险",watchpoints:"后续验证"};
   const cards = data?.status === "available" ? Object.entries(sections).map(([key,label]) => `<article class="research-card"><h3>${label}</h3>${(data.sections?.[key] || []).map(i=>`<p>${esc(i.text)}${GuanshiEvidence.references(i.evidence_ids || [],data.evidence || [],prefix)}</p>`).join("")}</article>`).join("") : "";
   const evidence = GuanshiEvidence.render(data?.evidence || [],prefix);
-  return `<section class="panel research-panel ai-report-panel"><div class="panel-heading"><div><h2>${esc(title)}</h2><p>${esc(data?.message || "尚无该报告的AI研判；后台生成后随报告发布。")}</p></div><span class="chip">${labels[data?.status] || "等待分析"}</span></div><div class="research-body">${data?.as_of ? `<p class="muted">依据截止 ${clockLabel(data.as_of)} · 生成 ${clockLabel(data.generated_at)} · ${esc(data.model || "")}</p>` : ""}<div class="research-grid ai-sections">${cards}</div>${evidence ? `<details class="analysis-sources"><summary>核对分析依据 · ${(data?.evidence || []).length} 项</summary>${evidence}</details>` : ""}</div></section>`;
+  return `<section class="panel research-panel ai-report-panel"><div class="panel-heading"><div><h2>${esc(title)}</h2><p>${esc(data?.message || "尚无该报告的AI研判；后台生成后随报告发布。")}</p></div><span class="chip">${labels[data?.status] || "等待分析"}</span></div><div class="research-body">${data?.as_of ? `<p class="muted">依据截止 ${clockLabel(data.as_of)} · 生成 ${clockLabel(data.generated_at)} · ${esc(data.model || "")}</p>` : ""}<div class="research-grid ai-sections">${cards}</div>${evidence ? `<details class="analysis-sources" data-evidence-key="${esc(`${prefix}:${data?.as_of || ""}:${data?.generated_at || ""}`)}"><summary>核对分析依据 · ${(data?.evidence || []).length} 项</summary>${evidence}</details>` : ""}</div></section>`;
 }
 function decisionMarkup(data) {
   if (!data?.enabled) return '<div class="notice"><span>当前成交仍沿用原量价规则；AI意见从启用后的下一批有效观察开始参与，不补造历史决策。</span></div>';
-  return `<section class="panel research-panel"><div class="panel-heading"><div><h2>AI、舆情与模拟交易决策</h2><p>${esc(data.message)} · ${esc(data.version)}</p></div><span class="chip">${esc({normal:"正常风险",reduce:"风险减半",pause:"暂停新增"}[data.market_action] || "等待有效分析")}</span></div><div class="research-body"><p>${esc(data.method)}</p><p class="muted">意见截止 ${clockLabel(data.as_of)} · 生成 ${clockLabel(data.generated_at)}</p><details><summary>逐股意见 · ${Object.keys(data.opinions || {}).length} 只</summary><div class="research-grid">${Object.entries(data.opinions || {}).map(([code,i])=>`<article class="research-card"><h3>${esc(code)} · ${esc({support:"支持观察买入",wait:"等待",exit:"退出意见"}[i.action])}</h3><p>判断强度 ${num(i.score,0)} / 100（非胜率）</p><p>${esc(i.text)}</p>${GuanshiEvidence.references(i.evidence_ids || [],data.evidence || [],"decision-ai")}${(data.news_risks?.[code] || []).map(t=>`<p class="negative">待核对新闻：${esc(t)}</p>`).join("")}</article>`).join("")}</div></details>${data.evidence?.length ? `<details class="analysis-sources"><summary>核对决策依据</summary>${GuanshiEvidence.render(data.evidence,"decision-ai")}</details>` : ""}</div></section>`;
+  return `<section class="panel research-panel"><div class="panel-heading"><div><h2>AI、舆情与模拟交易决策</h2><p>${esc(data.message)} · ${esc(data.version)}</p></div><span class="chip">${esc({normal:"正常风险",reduce:"风险减半",pause:"暂停新增"}[data.market_action] || "等待有效分析")}</span></div><div class="research-body"><p>${esc(data.method)}</p><p class="muted">意见截止 ${clockLabel(data.as_of)} · 生成 ${clockLabel(data.generated_at)}</p><details><summary>逐股意见 · ${Object.keys(data.opinions || {}).length} 只</summary><div class="research-grid">${Object.entries(data.opinions || {}).map(([code,i])=>`<article class="research-card"><h3>${esc(code)} · ${esc({support:"支持观察买入",wait:"等待",exit:"退出意见"}[i.action])}</h3><p>判断强度 ${num(i.score,0)} / 100（非胜率）</p><p>${esc(i.text)}</p>${GuanshiEvidence.references(i.evidence_ids || [],data.evidence || [],"decision-ai")}${(data.news_risks?.[code] || []).map(t=>`<p class="negative">待核对新闻：${esc(t)}</p>`).join("")}</article>`).join("")}</div></details>${data.evidence?.length ? `<details class="analysis-sources" data-evidence-key="${esc(`decision-ai:${data.as_of || ""}:${data.generated_at || ""}`)}"><summary>核对决策依据</summary>${GuanshiEvidence.render(data.evidence,"decision-ai")}</details>` : ""}</div></section>`;
 }
 function fillDecisionMarkup(data) {
   if (!data) return "";
@@ -392,6 +392,7 @@ async function loadBacktest() {
   finally { if (id === backtestId) button.disabled = !!OFFLINE; }
 }
 function renderBacktest(data) {
+  const openSources = GuanshiEvidence.remember($("backtest-output"));
   if (data.trade_plan) renderTradePlan(data.trade_plan);
   rememberTradeEvidence();
   if ($("fill-history")) fillHistoryOpen = $("fill-history").open;
@@ -463,6 +464,7 @@ function renderBacktest(data) {
     ${performanceCards}<details class="panel research-panel"><summary>模拟规则与参数</summary><div class="research-body"><p>${esc(data.method)}</p><p>${esc(parameterText)}${OFFLINE ? " · 离线快照固定参数，需在本地服务中修改" : ""}</p><p>${esc(riskText)}</p></div></details>
     <details class="panel research-panel"><summary>未成交与退出延期原因</summary><div class="research-body research-grid">${Object.entries(data.skipped || {}).map(([reason,count]) => `<div class="research-card">${esc(reason)}：${count}</div>`).join("") || "暂无跳过记录"}</div></details>
     ${(data.periods || []).map((p) => `<p>${esc(p.label)} ${dateLabel(p.from)} → ${dateLabel(p.to)}：${pct(p.return)}</p>`).join("")}`;
+  GuanshiEvidence.restore($("backtest-output"),openSources);
   $("trade-status").value = tradeStatus;
   renderTradeLedger();
   $("trade-search").addEventListener("input", (e) => { tradeSearch = e.target.value; renderTradeLedger(); });

@@ -64,6 +64,43 @@ def test_report_citations_open_readable_sources_without_internal_ids_or_json(bro
     assert evidence == original
 
 
+def test_public_portfolio_refresh_keeps_same_analysis_evidence_open(browser, populated):
+    from stock_daily.html_export import daily_payload, render_daily
+
+    db, settings, _ = populated
+    data = daily_payload(db, settings, public=True, portfolio=True)
+    evidence_input = research_input(snapshot_payload(), 'close')
+    analysis = {**fake_analysis(settings, evidence_input), 'evidence': evidence_input['evidence']}
+    data['backtest']['market_analysis'] = analysis
+    data['live_url'] = 'https://raw.githubusercontent.com/example/reports/pages-live/portfolio.json'
+    html = render_daily(data, settings)
+    feed = {'version': 'portfolio-live-v1', 'source': settings.source,
+        'data_at': analysis['as_of'], 'published_at': analysis['generated_at'], 'backtest': data['backtest']}
+    calls = []
+    with browser.new_context(viewport={'width': 390, 'height': 844}) as context:
+        context.route('https://reports.example/**', lambda route: route.fulfill(body=html, content_type='text/html'))
+        def respond(route):
+            calls.append(route.request.url)
+            route.fulfill(json=feed, headers={'access-control-allow-origin': '*'})
+        context.route('https://raw.githubusercontent.com/**', respond)
+        page = context.new_page()
+        page.goto('https://reports.example/portfolio.html')
+        page.wait_for_function("() => !publicPortfolioPending && currentView==='backtest' && document.querySelector('#backtest-output .evidence-ref')")
+        reference = page.locator('#backtest-output .evidence-ref').first
+        target = reference.get_attribute('href')
+        reference.click()
+        before = len(calls)
+        page.get_by_role('button', name='重新同步', exact=True).click()
+        page.wait_for_function('() => !publicPortfolioPending')
+        assert len(calls) > before
+        assert page.locator(target).is_visible()
+        assert '累计成交额' in page.locator(target).inner_text()
+        feed['backtest']['market_analysis'] = {**analysis, 'generated_at': '2026-10-12T15:15:00+08:00'}
+        page.get_by_role('button', name='重新同步', exact=True).click()
+        page.wait_for_function('() => !publicPortfolioPending')
+        assert not page.locator(target).is_visible()
+
+
 @pytest.mark.parametrize('kind', ['midday', 'close', 'daily'])
 def test_report_ai_uses_frozen_evidence_and_caches_without_mutating_reports(db, settings, kind):
     payload = snapshot_payload()

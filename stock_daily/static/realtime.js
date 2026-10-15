@@ -15,6 +15,7 @@ function newsCards(report) {
   $("news-more").hidden=items.length<=newsLimit;
 }
 function render() {
+  const openSources=GuanshiEvidence.remember($("content"));
   const r=data.report;
   if(r&&!archive){
     const parts=new Intl.DateTimeFormat("sv-SE",{timeZone:"Asia/Shanghai",year:"numeric",month:"2-digit",day:"2-digit",hour:"2-digit",minute:"2-digit",hour12:false}).format(new Date()).split(" ");
@@ -36,7 +37,8 @@ function render() {
     <section class="panel"><h2>新闻与舆情线索</h2><p class="meta">${esc(s.method)}</p><div class="badges">${[["报道样本",s.sample_count],["风险事项",s.risk_count],["传闻 / 澄清",s.unverified_count],["政策报道",s.policy_count]].map(([k,v])=>`<span class="badge">${k} ${v}</span>`).join("")}</div><div class="badges">${s.topics.map(t=>`<span class="badge">${esc(t.name)} · ${t.count}条提及</span>`).join("")||'<span class="muted">当前没有可确认的主题热度样本。</span>'}</div><p class="meta">${r.news.sources.map(i=>`${esc(i.name)}：${esc({available:"可用",empty:"本次为空",partial:"部分可用",unavailable:"接口暂不可用",stale:"采集已过期",not_collected:"尚未采集"}[i.status]||i.status)} ${time(i.fetched_at)}`).join("<br>")}</p>
     <div class="news-tools"><input id="news-search" type="search" placeholder="搜索主题、公司或新闻" aria-label="搜索新闻"><select id="news-kind" aria-label="新闻类型"><option value="all">全部报道</option><option>风险事项待核对</option><option>传闻/澄清待核对</option><option>政策/监管报道</option><option>行业/公司报道</option><option>行情报道</option></select></div><p id="news-count" class="meta"></p><div id="news-list" class="news-grid"></div><button id="news-more" type="button">查看更多报道</button></section>
     <section class="panel"><h2>量价观察</h2><p class="meta">个股报价均有独立时间；累计量/全天均量不代表同时间放量。</p><div class="two-col">${[["涨幅观察",r.leaders],["跌幅观察",r.laggards]].map(([label,rows])=>`<div><h3>${label}</h3><div class="table-wrap"><table><thead><tr><th>股票</th><th>涨跌</th><th>距MA20</th><th>累计量/全天均量</th></tr></thead><tbody>${rows.map(q=>`<tr><td>${esc(q.name)}<small>${esc(q.code)} · ${time(q.quote_time)}</small></td><td class="${tone(q.pct)}">${pct(q.pct)}</td><td>${pct(q.distance_ma20)}</td><td>${num(q.cumulative_daily_volume_ratio)} ×</td></tr>`).join("")}</tbody></table></div></div>`).join("")}</div></section>
-    <section class="panel"><details><summary>数据依据与范围 · ${r.evidence.length}项</summary>${GuanshiEvidence.render(r.evidence,"realtime-ai")}<ul>${r.notes.map(n=>`<li class="meta">${esc(n)}</li>`).join("")}</ul></details></section>`;
+    <section class="panel"><details class="analysis-sources" data-evidence-key="${esc(`realtime-ai:${r.captured_at}:${ai.generated_at || ""}`)}"><summary>数据依据与范围 · ${r.evidence.length}项</summary>${GuanshiEvidence.render(r.evidence,"realtime-ai")}<ul>${r.notes.map(n=>`<li class="meta">${esc(n)}</li>`).join("")}</ul></details></section>`;
+  GuanshiEvidence.restore($("content"),openSources);
   $("news-search").value=search;$("news-kind").value=category;
   $("news-search").addEventListener("input",e=>{search=e.target.value;newsLimit=24;newsCards(r);});
   $("news-kind").addEventListener("change",e=>{category=e.target.value;newsLimit=24;newsCards(r);});
