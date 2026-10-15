@@ -2,7 +2,7 @@
 
 import math
 from copy import deepcopy
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime, timedelta
 
 from sqlalchemy import select
@@ -10,6 +10,7 @@ from sqlalchemy import select
 from .backtest import board, effective_config, fees, position_value, simulate, simulation_profile
 from .config import SHANGHAI, now
 from .db import bars, paper_accounts, paper_quote_batches, reports, sessions, signals, trading_days
+from .decision_ai import assessment, configured_policy, decision_context, latest_analysis
 from .entry_policy import METHOD as ENTRY_METHOD
 from .entry_policy import VERSION as ENTRY_VERSION
 from .entry_policy import confirmation, rank_key
@@ -217,6 +218,8 @@ def execute_quotes(db, settings, payload, current=None):
         previous_quotes = previous_batches[0]["payload"]["quotes"] if previous_batches else {}
         errors = {p["code"]: error for p in account["positions"]
             if (error := _quote_error(quotes.get(p["code"]), prior.get(p["code"]), day, current))}
+        ai_context = decision_context(db, settings, current)
+        account["decision_context"] = ai_context
         count_before = len(account["fills"])
         decisions = {}
         decisions.update(errors)
@@ -230,6 +233,13 @@ def execute_quotes(db, settings, payload, current=None):
             q = quotes[code]
             p.update(mark=q["price"], quote_time=q["quote_time"])
             advance(p, q, context(db, settings.source, p, basis), config)
+            opinion = assessment(ai_context, code, q)
+            if opinion['exit'] and not p['exit_due']:
+                p.update(exit_due='AI与行情共振退出：' + opinion['reason'], exit_trigger_kind='quote',
+                    exit_trigger_time=q['quote_time'], exit_trigger_price=q['price'], exit_decision={**opinion, 'applied': True})
+            if p['exit_due'] and ai_context['enabled'] and 'exit_decision' not in p:
+                p['exit_decision'] = {**opinion, 'applied': False,
+                    'reason': '固定风控退出优先，AI意见仅留档：' + opinion.get('reason', '')}
             if not p["exit_due"]:
                 continue
             if p["entry_day"] >= day:
@@ -287,7 +297,16 @@ def execute_quotes(db, settings, payload, current=None):
             account["execution_state"]["quote_peak_equity"] = peak
             if config.drawdown_pause and equity / peak - 1 <= -config.drawdown_pause:
                 account["execution_state"]["entry_paused"] = True
-        ordered = sorted(candidates, key=lambda s: rank_key(s, evaluations))
+        for signal in candidates:
+            key = f"{basis}|{signal['code']}|{signal['strategy']}"
+            opinion = assessment(ai_context, signal['code'], valid_quotes.get(signal['code']))
+            if ai_context['enabled']:
+                evaluations[key]['decision_context'] = opinion
+                if evaluations[key]['status'] == 'eligible' and not opinion['buy_allowed']:
+                    evaluations[key].update(status='waiting', reason='AI/舆情等待：' + opinion['reason'])
+        ordered = sorted(candidates, key=lambda s: (
+            evaluations[f"{basis}|{s['code']}|{s['strategy']}"]['status'] != 'eligible',
+            -assessment(ai_context, s['code'])['score'], *rank_key(s, evaluations)))
         for rank, signal in enumerate(ordered, 1):
             evaluations[f"{basis}|{signal['code']}|{signal['strategy']}"]["decision_rank"] = rank
         for signal in ordered if not errors else []:
@@ -342,7 +361,8 @@ def execute_quotes(db, settings, payload, current=None):
             equity = cash + sum(p["shares"] * p["mark"] for p in positions.values())
             industry = industry_of(item)
             exposure = sum(p["shares"] * p["mark"] for p in positions.values() if p["industry"] == industry)
-            sizing = entry_size(config, cash=cash, equity=equity, price=price, previous=previous,
+            sizing_config = replace(config, weight=config.weight * .5, risk_fraction=config.risk_fraction * .5)                 if ai_context.get('market_action') == 'reduce' else config
+            sizing = entry_size(sizing_config, cash=cash, equity=equity, price=price, previous=previous,
                 payload=item, lot=lot, industry_value=exposure,
                 volume_capacity=evaluations[key]["interval_volume"] * config.participation)
             sizing["interval_volume_capacity"] = evaluations[key]["interval_volume"] * config.participation
@@ -363,6 +383,7 @@ def execute_quotes(db, settings, payload, current=None):
                 "rule_version": item.get("rule_version", ""), "entry_reasons": item.get("reasons", []),
                 "entry_risk": sizing, "industry": industry, "signal_day": basis,
                 "entry_confirmation": deepcopy(evaluations[key]),
+                "entry_decision": {**assessment(ai_context, code, q), "applied": True} if ai_context["enabled"] else None,
                 "invalidation_price": item["invalidation_adj"] / previous["adj"],
                 "invalidation_adj": item["invalidation_adj"], "exit_due": None, "exit_trigger_day": None,
                 "exit_trigger_close": None, "exit_delays": [], "held_sessions": 0}
@@ -407,7 +428,7 @@ def execute_quotes(db, settings, payload, current=None):
             "保存报价及确认时间；不回填错过的开盘成交。买入后最早下一交易日卖出，"
             "盘中风险止损与移动盈利保护优先，连续两日收盘低于MA20退出，持有期10日兜底；"
             "保护线只上移，峰值仅用启用后观察到的报价；已确认成交不撤销。" + ENTRY_METHOD)
-        account["execution_version"] = "paper-quote-v3"
+        account["execution_version"] = "paper-quote-ai-v1" if settings.ai_trading_enabled else "paper-quote-v3"
         account["exit_policy"] = {**asdict(POLICY), "activated_at": account.get("exit_policy", {}).get("activated_at", current.isoformat())}
         with db.engine.begin() as connection:
             db.upsert(connection, paper_quote_batches, {"source": settings.source, "day": day,
@@ -427,6 +448,8 @@ def current_account(db, settings, report_day, current=None):
     if not rows or rows[0]["day"] < report_day:
         return None
     account = reconcile(db, settings, rows[0]["payload"]["account"], report_day)
+    account["market_analysis"] = latest_analysis(db, settings, current)
+    account["decision_policy"] = configured_policy(settings)
     account["exit_policy_config"] = asdict(POLICY)
     account["entry_policy_config"] = {"version": ENTRY_VERSION, "method": ENTRY_METHOD}
     if account["paper_trading"]["daily_through"] >= account["summary"]["through"]:

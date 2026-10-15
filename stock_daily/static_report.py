@@ -96,7 +96,7 @@ def daily_view(payload, *, fill_history=None):
     result = {"kind": "daily", "day": report["day"] if report else None,
               "dashboard": dashboard, "report": report, "tracking": payload["tracking"], "metrics": [],
               "backtest": payload.get("backtest"),
-              "fills": fill_history}
+              "fills": fill_history, "report_analysis": dashboard.get("report_analysis")}
     if not report:
         return result
     market = report["market"]

@@ -316,3 +316,19 @@ def test_operator_retry_uses_failed_snapshot_without_refetch_or_changing_capture
     assert saved['ai']['status'] == 'available'
     assert saved['captured_at'] == old['captured_at'] and saved['news'] == old['news']
     assert saved['evidence'] == old['evidence']
+
+
+def test_after_hours_ai_retry_uses_frozen_snapshot_without_trading_or_new_collection(db, config):
+    from stock_daily.realtime import retry_saved
+
+    def fail(*args):
+        raise ValueError('引用失败')
+    capture(db, config, analyzer=fail)
+    old = deepcopy(view(db, config, current=CURRENT)['report'])
+    before = {table.name: db.rows(select(table)) for table in (paper_accounts, trade_alerts, signals)}
+    result = retry_saved(db, config, old['window'], analyzer=fake_analysis)
+    updated = view(db, config, current=CURRENT)['report']
+    assert result['ai_status'] == 'available'
+    for key in ('captured_at', 'quote_start', 'quote_end', 'news', 'evidence'):
+        assert updated[key] == old[key]
+    assert before == {table.name: db.rows(select(table)) for table in (paper_accounts, trade_alerts, signals)}

@@ -92,7 +92,11 @@ def main():
     saved_snapshot.add_argument("--slot", choices=("midday", "close"), help="指定快照时段")
     commands.add_parser("news", help="采集并留存免费滚动财经快讯，不发送邮件")
     realtime = commands.add_parser("realtime", help="采集本交易时段的行情、新闻舆情与AI盘中分析；不执行交易")
+    realtime.add_argument("--window", help="重试已保存的观察时点，例如20261015-close；须与--retry-ai一起使用")
     realtime.add_argument("--retry-ai", action="store_true", help="仅重试当前时点失败的AI分析，复用原行情与新闻")
+    report_ai = commands.add_parser("analyze-reports", help="基于已保存证据生成午间、收盘和日线AI分析，不重新采集或交易")
+    report_ai.add_argument("--date", help="YYYYMMDD；不指定时处理各时段最近一份报告")
+    report_ai.add_argument("--retry", action="store_true", help="重新尝试失败的报告分析")
     news_refresh = commands.add_parser("news-refresh", help="为当天已保存快照补充新闻，明确标记补采时间，不重新请求行情或发信")
     news_refresh.add_argument("--date", help="YYYYMMDD，默认北京时间当天")
     news_refresh.add_argument("--slot", choices=("midday", "close"), default="close")
@@ -177,6 +181,10 @@ def main():
             from .news import collect_news
 
             result = collect_news(db, settings, force=True)
+        elif args.command == "analyze-reports":
+            from .report_ai import generate_saved
+
+            result = generate_saved(db, settings, args.date, retry=args.retry)
         elif args.command == "news-refresh":
             from .news import refresh_snapshot_news
 
@@ -249,7 +257,14 @@ def main():
         elif args.command == "realtime":
             from .realtime import run
 
-            result = run(db, settings, retry_ai=args.retry_ai)
+            if args.window:
+                if not args.retry_ai:
+                    raise ValueError('--window必须与--retry-ai一起使用，只重试已保存分析')
+                from .realtime import retry_saved
+
+                result = retry_saved(db, settings, args.window)
+            else:
+                result = run(db, settings, retry_ai=args.retry_ai)
         elif args.command == "backup":
             from .operations import backup_database
 

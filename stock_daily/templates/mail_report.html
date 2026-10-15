@@ -46,6 +46,7 @@
 {%- endmacro %}
 <div id="static-report" class="mail-report">
 <p class="mail-hint">邮件附件预览可直接阅读。使用浏览器打开，可搜索和筛选报告。</p>
+{% if mail.kind == "daily" %}{% with analysis=(mail.backtest or {}).get("market_analysis") if (mail.backtest or {}).get("market_analysis") else mail.get("report_analysis") %}{% include "ai_report.html" %}{% endwith %}{% endif %}
 {% if mail.kind == 'daily' and not mail.report %}
 <section class="mail-section"><h2>尚无已发布报告</h2><p>当前来源：{{ mail.dashboard.source }}。这是导出时的采集状态。</p>{% for run in mail.dashboard.runs[:4] %}<p>{{ run.day }} · {{ run.status }} · {{ run.message }}</p>{% endfor %}</section>
 {% else %}

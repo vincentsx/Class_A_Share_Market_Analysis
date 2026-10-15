@@ -63,7 +63,9 @@ def dashboard(db, settings, day=None):
     if "evidence" not in report:
         report["evidence"] = evidence(db, settings, frozen_report)
     from .evidence_ai import cached_summary
+    from .report_ai import cached
 
+    data['report_analysis'] = cached(db, settings, frozen_report, 'daily')
     data["ai_configured"] = bool(settings.ai_api_key and settings.ai_model)
     data["evidence_summary"] = cached_summary(db, settings, report["day"], report["evidence"])
     stock_map = {m["code"]: m for m in report["stocks"]}

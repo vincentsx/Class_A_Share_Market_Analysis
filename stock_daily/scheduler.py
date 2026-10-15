@@ -75,6 +75,9 @@ def run_evening(db, settings, day):
             # A fresh daily run already queried today's announcements; an existing
             # report needs its evening refresh, preserving original signal evidence.
             refresh_events(db, config, day)
+        from .report_ai import generate
+
+        generate(db, settings, db.latest_report(settings.source, day), 'daily')
         artifacts = None
         email = {"status": "disabled"}
         if settings.export_html or settings.export_png:

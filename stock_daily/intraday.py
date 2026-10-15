@@ -260,6 +260,12 @@ def run_snapshot(db, settings, day=None, slot="midday", feed=None, provider=None
             with db.engine.begin() as connection:
                 db.upsert(connection, snapshots, {"source": settings.source, "day": day,
                                                   "slot": slot, "payload": payload})
+            from .report_ai import generate
+
+            payload['ai_analysis'] = generate(db, settings, payload, slot)
+            with db.engine.begin() as connection:
+                db.upsert(connection, snapshots, {'source': settings.source, 'day': day,
+                    'slot': slot, 'payload': payload})
             artifacts = {}
             if settings.export_html or settings.export_png:
                 export_id = db.start_run(settings.source, day, "export")

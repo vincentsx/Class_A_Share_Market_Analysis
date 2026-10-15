@@ -52,6 +52,10 @@ def compose_trade(settings, event):
                   ("当日成交均价", f"{entry['vwap']:.4f} 元"),
                   ("区间新增成交量", f"{entry['interval_volume']:.0f} 股"),
                   ("区间相对沪深300", f"{entry['relative_interval']:+.2f} 个百分点")]
+    decision = fill.get('decision_context')
+    if decision:
+        facts += [('AI/舆情决策', decision.get('reason', '')), ('AI依据截止', decision.get('as_of', '')),
+                  ('AI模型与版本', f"{decision.get('model', '')} / {decision.get('version', '')}")]
     protection = fill.get("exit_policy")
     if protection:
         facts += [("退出规则", protection["version"]), ("当前保护价", f"{protection['stop']:.4f} 元"),

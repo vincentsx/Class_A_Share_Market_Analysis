@@ -40,6 +40,14 @@ evidence_summaries = Table(
     Column("fingerprint", String(64), primary_key=True),
     Column("payload", JSON, nullable=False),
 )
+report_analyses = Table(
+    "report_analyses", metadata,
+    Column("source", String(20), primary_key=True),
+    Column("day", String(8), primary_key=True),
+    Column("kind", String(20), primary_key=True),
+    Column("fingerprint", String(64), primary_key=True),
+    Column("payload", JSON, nullable=False),
+)
 watch_plans = Table(
     "watch_plans", metadata,
     Column("code", String(20), primary_key=True),

@@ -1,0 +1,9 @@
+{% set analysis = analysis or {} %}
+<section class="panel ai-report-panel">
+  <div class="panel-heading"><div><h2>AI市场研判</h2><p>{{ analysis.get('message', '该报告的AI分析尚未生成；后台生成后随报告发布。') }}</p></div><span class="chip">{{ {'available':'分析已完成','failed':'分析未通过','disabled':'未启用','unconfigured':'待配置','not_generated':'待生成'}.get(analysis.get('status'), '等待分析') }}</span></div>
+  <div class="research-body">
+  {% if analysis.get('as_of') %}<p class="muted">依据截止 {{ mail_time(analysis.as_of) }} · 生成 {{ mail_time(analysis.get('generated_at')) }} · {{ analysis.get('model', '') }}</p>{% endif %}
+  {% if analysis.get('status') == 'available' %}<div class="research-grid ai-sections">{% for key, label in [('overview','市场研判'),('focus','关注方向'),('risks','主要风险'),('watchpoints','后续验证')] %}<article class="research-card"><h3>{{ label }}</h3>{% for item in analysis.sections.get(key, []) %}<p>{{ item.text }} <small>依据 {{ item.evidence_ids|join(' / ') }}</small></p>{% endfor %}</article>{% endfor %}</div>
+  <details><summary>核对分析依据</summary>{% for card in analysis.get('evidence', []) %}<article class="analysis-evidence"><b>{{ card.id }} · {{ card.title }}</b><p>{{ card.text }}</p>{% for source in card.get('sources', []) %}{% if mail_link(source.url) %}<a href="{{ mail_link(source.url) }}" target="_blank" rel="noopener noreferrer">{{ source.name }} ↗</a>{% endif %}{% endfor %}</article>{% endfor %}</details>{% endif %}
+  </div>
+</section>

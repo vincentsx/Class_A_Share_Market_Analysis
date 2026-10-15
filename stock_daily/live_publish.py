@@ -35,12 +35,19 @@ def public_portfolio(db, settings):
     simulation = current_account(db, settings, report["day"]) or simulation
     if "valuation" not in simulation:
         simulation["valuation"] = value_portfolio(db, settings, simulation)
+    from .decision_ai import configured_policy, latest_analysis
+
+    simulation["market_analysis"] = latest_analysis(db, settings, now())
+    simulation["decision_policy"] = configured_policy(settings)
     valuation = simulation["valuation"]
     from .trade_plan import build_trade_plan
 
     plan = report.get("trade_plan") or build_trade_plan(db, settings, report)
     plan = annotate_plan(plan, simulation)
+    from .report_ai import public_analyses
+
     return {"version": VERSION, "source": settings.source, "report_day": report["day"],
+            "report_analyses": public_analyses(db, settings),
             "data_at": valuation.get("captured_at", report.get("generated_at", "")),
             "backtest": simulation, "trade_plan": plan}
 

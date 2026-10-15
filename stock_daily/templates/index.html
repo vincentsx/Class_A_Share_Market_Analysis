@@ -48,6 +48,7 @@
       <div id="empty" class="empty-state" hidden><div class="empty-icon">◫</div><h2 id="empty-title">第一份复盘，等待生成。</h2><p id="empty-help">{{ '初始化合成示例后即可浏览。' if source == 'demo' else '请运行盘后采集。非交易日用 --date 指定实际交易日，首次需要补齐历史。' }}</p><code id="empty-command">.venv/bin/python -m stock_daily {{ 'demo' if source == 'demo' else 'run' }}</code>{% if source == 'baostock' %}<p>BaoStock 覆盖的沪深A股，不含北交所；公告由 AKShare 补查。</p>{% endif %}</div>
       <div id="report-content" hidden>
         <section id="view-overview" class="view">
+          <div id="report-ai-content"></div>
           <div class="section-heading"><h2>市场温度</h2><span id="market-date"></span></div>
           <div id="market-cards" class="metric-grid"></div>
           <div class="two-column">

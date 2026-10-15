@@ -77,6 +77,10 @@ def daily_payload(db, settings, day=None, public=False, portfolio=False):
         from .portfolio import value_portfolio
 
         simulation = current_account(db, settings, report["day"]) or simulation
+        from .decision_ai import configured_policy, latest_analysis
+
+        simulation['market_analysis'] = latest_analysis(db, settings, now())
+        simulation['decision_policy'] = configured_policy(settings)
         if "valuation" not in simulation:
             simulation["valuation"] = value_portfolio(db, settings, simulation)
         data["report"]["trade_plan"] = annotate_plan(data["report"].get("trade_plan"), simulation)

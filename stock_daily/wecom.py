@@ -121,6 +121,9 @@ def trade_content(fill):
         lines += [f"盘中买入确认：{e['version']} · {clean(e['reason'])}",
             f"当日成交均价：{e['vwap']:.4f} 元 · 区间新增成交 {e['interval_volume']:.0f} 股",
             f"区间相对沪深300：{e['relative_interval']:+.2f} 个百分点"]
+    if fill.get('decision_context'):
+        d = fill['decision_context']
+        lines += [f"AI/舆情依据：{clean(d.get('reason'))}", f"AI依据截止：{clean(d.get('as_of'))}"]
     if fill.get("exit_policy"):
         p = fill["exit_policy"]
         lines.append(f"退出保护：{p['version']} · 保护价 {p['stop']:.4f} 元")

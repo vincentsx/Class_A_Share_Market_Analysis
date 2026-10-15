@@ -54,6 +54,11 @@ def refresh(folder, repository, assets, live_plan=None):
             payload = json.loads(match[1])
             if not payload.get('public'):
                 raise ValueError('Snapshot must be public')
+            report_analysis = (live_plan or {}).get('report_analyses', {}).get(record['slot'], {})
+            if ((live_plan or {}).get('source') == payload['source']
+                    and report_analysis.get('day') == payload['day']
+                    and report_analysis.get('analysis', {}).get('as_of') == payload['captured_at']):
+                payload['ai_analysis'] = report_analysis['analysis']
             path.write_text(env.get_template('snapshot.html').render(
                 data=payload, snapshot=encode_snapshot(payload), nonce=secrets.token_urlsafe(24),
                 cutoff=payload.get('scheduled_time') or ('11:35' if record['slot'] == 'midday' else '15:05'),
@@ -79,6 +84,18 @@ def refresh(folder, repository, assets, live_plan=None):
         if payload.get('portfolio'):
             endpoint = f'https://raw.githubusercontent.com/{repository}/pages-live/portfolio.json'
             payload['live_url'] = endpoint
+        report_analysis = (live_plan or {}).get('report_analyses', {}).get('daily', {})
+        if ((live_plan or {}).get('source') == payload['dashboard']['source']
+                and report_analysis.get('day') == payload['dashboard']['report']['day']
+                and report_analysis.get('analysis', {}).get('as_of') == payload['dashboard']['report'].get('generated_at')):
+            payload['dashboard']['report_analysis'] = report_analysis['analysis']
+        if payload.get('portfolio') and (live_plan or {}).get('source') == payload['dashboard']['source']:
+            latest_analysis = (live_plan or {}).get('backtest', {}).get('market_analysis')
+            if latest_analysis:
+                payload['backtest']['market_analysis'] = latest_analysis
+            configured = (live_plan or {}).get('backtest', {}).get('decision_policy')
+            if configured:
+                payload['backtest']['decision_policy'] = configured
         exported = datetime.fromisoformat(payload['exported_at']).astimezone(ZoneInfo('Asia/Shanghai'))
         html = env.get_template('index.html').render(
             source=payload['dashboard']['source'], public_report=True,

@@ -35,6 +35,7 @@ class Settings:
     realtime_enabled: bool = True
     realtime_interval_minutes: int = 10
     realtime_ai_enabled: bool = True
+    ai_trading_enabled: bool = False
     history_sessions: int = 100
     min_amount: float = 50_000_000
     min_coverage: float = 0.98
@@ -93,6 +94,7 @@ class Settings:
             realtime_enabled=os.getenv("REALTIME_ENABLED", "true").lower() == "true",
             realtime_interval_minutes=int(os.getenv("REALTIME_INTERVAL_MINUTES", "10")),
             realtime_ai_enabled=os.getenv("REALTIME_AI_ENABLED", "true").lower() == "true",
+            ai_trading_enabled=os.getenv("AI_TRADING_ENABLED", "false").lower() == "true",
             history_sessions=int(os.getenv("HISTORY_SESSIONS", "100")),
             min_amount=float(os.getenv("MIN_AMOUNT_YUAN", "50000000")),
             min_coverage=float(os.getenv("MIN_COVERAGE", "0.98")),

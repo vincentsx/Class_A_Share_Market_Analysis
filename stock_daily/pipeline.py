@@ -264,6 +264,9 @@ def run_daily(db, settings, day=None, force=False, provider=None):
                           f"优先展示{len(report['candidates'])}个")
             result = {"status": "success", "day": day, "candidates": len(report["candidates"]),
                       "all_candidates": len(report["all_candidates"])}
+            from .report_ai import generate
+
+            generate(db, settings, report, 'daily')
             html = publish_html(db, settings, day, identifier)
             if html:
                 result["html"] = html

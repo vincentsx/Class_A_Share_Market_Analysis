@@ -1,4 +1,4 @@
-"""Independent ten-minute market/news/AI snapshots, never trade execution inputs."""
+"""Ten-minute market/news/AI snapshots with validated forward-only paper decision inputs."""
 
 import hashlib
 import json
@@ -161,7 +161,7 @@ def build(db, settings, day, window, quotes, stocks, basis, captured):
             'MA20及20日高点仅使用前一交易日及以前的完整日线；近期复权变化或历史不足时留空。',
             '累计成交量/前20日全天均量只是累计量比较，不是同时间量比或全天成交量预测。',
             '新闻舆情仅覆盖已采集公开报道，不包含股吧、社交媒体评论或投资者情绪调查。',
-            '盘中分析不写入日线信号、不自动修改策略；模拟成交及提醒继续独立运行。']}
+            '盘中分析可参与模拟交易；固定风控和成交确认独立检查，保留当时证据，不改写历史成交。']}
     news_input = {'day': day, 'slot': 'realtime', 'captured_at': captured.isoformat(),
         'quotes': rows, 'industries': industries, 'focus': []}
     report['news'] = build_news(db, settings, news_input)
@@ -189,6 +189,9 @@ def build(db, settings, day, window, quotes, stocks, basis, captured):
             'text': item['excerpt'], 'kind': item['kind'], 'sources': item['sources'],
             'published_at': item['published_at']})
     report['evidence'] = evidence
+    from .decision_ai import attach_universe
+
+    attach_universe(db, settings, report, quotes)
     report['ai'] = {'status': 'pending', 'message': '本次行情和新闻已保存，AI分析生成中'}
     return report
 
@@ -272,3 +275,28 @@ def render(payload, settings, public=False):
         snapshot=script_json(payload), nonce=secrets.token_urlsafe(24),
         css=(ASSETS / 'static/realtime.css').read_text(),
         javascript=(ASSETS / 'static/realtime.js').read_text())
+
+
+def retry_saved(db, settings, window, analyzer=None):
+    """Repair a saved AI result after hours, without gathering new data or executing."""
+    import re
+    from copy import deepcopy
+
+    from .realtime_ai import analyze
+
+    if not re.fullmatch(r'\d{8}-(?:\d{4}|close)', window):
+        raise ValueError('观察时点格式无效')
+    with db.lock('realtime:' + settings.source, lease_minutes=10):
+        rows = db.rows(query_reports(settings, window=window).limit(1))
+        if not rows:
+            raise DataError('没有该时点的已保存分析')
+        report = deepcopy(rows[0]['payload'])
+        if report['ai']['status'] == 'available':
+            return {'status': 'unchanged', 'window': window, 'ai_status': 'available'}
+        try:
+            report['ai'] = (analyzer or analyze)(settings, report)
+        except ValueError as error:
+            report['ai'] = {'status': 'failed', 'message': str(error), 'as_of': report['captured_at']}
+        with db.engine.begin() as connection:
+            db.upsert(connection, realtime_reports, {**rows[0], 'payload': report})
+        return {'status': 'success', 'window': window, 'ai_status': report['ai']['status']}

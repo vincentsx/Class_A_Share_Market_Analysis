@@ -41,7 +41,14 @@ function render() {
   $("news-search").addEventListener("input",e=>{search=e.target.value;newsLimit=24;newsCards(r);});
   $("news-kind").addEventListener("change",e=>{category=e.target.value;newsLimit=24;newsCards(r);});
   $("news-more").addEventListener("click",()=>{newsLimit+=24;newsCards(r);});
-  newsCards(r);window.REALTIME_READY=true;
+  newsCards(r);
+  if(ai.trade_policy?.status === "available") {
+    const policy=ai.trade_policy;
+    const panel=document.createElement("section");panel.className="panel";
+    panel.innerHTML=`<h2>模拟交易意见</h2><p>${esc(policy.text)} · ${esc({normal:"正常风险",reduce:"风险减半",pause:"暂停新增"}[policy.market_action])}</p><div class="news-grid">${policy.stocks.map(i=>`<article class="ai-block"><h3>${esc(i.code)} · ${esc({support:"支持观察买入",wait:"等待",exit:"退出意见"}[i.action])}</h3><p>${esc(i.text)}</p><small>判断强度 ${i.score}/100（非胜率） · ${i.evidence_ids.map(esc).join(" / ")}</small></article>`).join("")}</div><p class="meta">仅提供决策意见；报价确认、T+1、资金和止损等约束优先。成交详情保存实际采用的意见。</p>`;
+    $("content").append(panel);
+  }
+  window.REALTIME_READY=true;
 }
 async function fetchData(url) {const r=await fetch(url,{cache:"no-store"});if(!r.ok)throw new Error("数据同步暂不可用");return r.json();}
 async function refresh(manual=false) {

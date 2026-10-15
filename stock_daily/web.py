@@ -158,6 +158,12 @@ def create_app(settings=None, database=None):
                 if config == simulation_profile() and latest and (day is None or day == latest["day"]):
                     result = current_account(database, settings, latest["day"]) or result
                     result["trade_plan"] = annotate_plan(latest.get("trade_plan"), result)
+                from .config import now
+                from .decision_ai import configured_policy, latest_analysis
+
+                if config == simulation_profile() and latest and (day is None or day == latest['day']):
+                    result['market_analysis'] = latest_analysis(database, settings, now())
+                    result['decision_policy'] = configured_policy(settings)
                 if "valuation" not in result:
                     result["valuation"] = value_portfolio(database, settings, result)
             return result
