@@ -56,6 +56,8 @@ def summarize_evidence(db, settings, report):
                                  "只输出JSON，严格符合以下结构：" + json.dumps(schema, ensure_ascii=False)},
                                 {"role": "user", "content": request["input"]}],
                    "response_format": {"type": "json_object"}, "stream": False}
+        if settings.ai_model.startswith(('deepseek-v4', 'deepseek-flash')):
+            request.update(reasoning_effort='high', thinking={'type': 'enabled'}, max_tokens=16384)
     else:
         path = "/responses"
     try:

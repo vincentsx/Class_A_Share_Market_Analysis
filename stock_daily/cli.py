@@ -93,7 +93,7 @@ def main():
     commands.add_parser("news", help="采集并留存免费滚动财经快讯，不发送邮件")
     realtime = commands.add_parser("realtime", help="采集本交易时段的行情、新闻舆情与AI盘中分析；不执行交易")
     realtime.add_argument("--window", help="重试已保存的观察时点，例如20261015-close；须与--retry-ai一起使用")
-    realtime.add_argument("--retry-ai", action="store_true", help="仅重试当前时点失败的AI分析，复用原行情与新闻")
+    realtime.add_argument("--retry-ai", action="store_true", help="重试失败的AI分析；指定--window时也可更新已切换的模型，复用原行情与新闻")
     report_ai = commands.add_parser("analyze-reports", help="基于已保存证据生成午间、收盘和日线AI分析，不重新采集或交易")
     report_ai.add_argument("--date", help="YYYYMMDD；不指定时处理各时段最近一份报告")
     report_ai.add_argument("--retry", action="store_true", help="重新尝试失败的报告分析")

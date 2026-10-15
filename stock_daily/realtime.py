@@ -291,7 +291,7 @@ def retry_saved(db, settings, window, analyzer=None):
         if not rows:
             raise DataError('没有该时点的已保存分析')
         report = deepcopy(rows[0]['payload'])
-        if report['ai']['status'] == 'available':
+        if report['ai']['status'] == 'available' and report['ai'].get('model') == settings.ai_model:
             return {'status': 'unchanged', 'window': window, 'ai_status': 'available'}
         try:
             report['ai'] = (analyzer or analyze)(settings, report)

@@ -434,11 +434,12 @@ def test_ai_summary_checks_citations_and_caches_without_second_request(populated
         summarize_evidence(db, config, report)
 
 
-def test_compatible_chat_summary_routes_correctly_and_provider_cache_is_separate(populated, monkeypatch):
+@pytest.mark.parametrize('model', ['deepseek-v4-pro', 'deepseek-flash'])
+def test_compatible_chat_summary_routes_correctly_and_provider_cache_is_separate(populated, monkeypatch, model):
     import json
 
     db, settings, _ = populated
-    config = replace(settings, ai_api_key="test-secret", ai_model="deepseek-v4-pro",
+    config = replace(settings, ai_api_key="test-secret", ai_model=model,
                      ai_api_base_url="https://compatible.example/v1", ai_api_style="chat_completions")
     report = db.latest_report("demo")
     report["evidence"] = {"as_of": "2026-10-09T20:30:00+08:00", "items": [{"id": "fact-1", "title": "原文"}]}
@@ -452,9 +453,11 @@ def test_compatible_chat_summary_routes_correctly_and_provider_cache_is_separate
 
     monkeypatch.setattr(httpx.Client, "post", post)
     result = summarize_evidence(db, config, report)
-    assert result["model"] == "deepseek-v4-pro"
+    assert result["model"] == model
     assert calls[0][0] == "https://compatible.example/v1/chat/completions"
     assert calls[0][1]["response_format"] == {"type": "json_object"}
+    assert calls[0][1]['reasoning_effort'] == 'high'
+    assert calls[0][1]['thinking'] == {'type': 'enabled'}
     assert len(calls[0][1]["messages"]) == 2
     assert "test-secret" not in repr(config)
     summarize_evidence(db, config, report)

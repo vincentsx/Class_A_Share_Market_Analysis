@@ -332,3 +332,22 @@ def test_after_hours_ai_retry_uses_frozen_snapshot_without_trading_or_new_collec
     for key in ('captured_at', 'quote_start', 'quote_end', 'news', 'evidence'):
         assert updated[key] == old[key]
     assert before == {table.name: db.rows(select(table)) for table in (paper_accounts, trade_alerts, signals)}
+
+
+def test_model_switch_reanalyzes_saved_evidence_once_without_changing_trades(db, config):
+    from stock_daily.realtime import retry_saved
+
+    capture(db, config)
+    old = deepcopy(view(db, config, current=CURRENT)['report'])
+    before = {table.name: db.rows(select(table)) for table in (paper_accounts, trade_alerts, signals)}
+    switched = replace(config, ai_model='deepseek-flash')
+    calls = []
+    def model(settings, report):
+        calls.append(deepcopy(report))
+        return {**fake_analysis(settings, report), 'model': settings.ai_model}
+    assert retry_saved(db, switched, old['window'], analyzer=model)['ai_status'] == 'available'
+    assert retry_saved(db, switched, old['window'], analyzer=model)['status'] == 'unchanged'
+    updated = view(db, switched, current=CURRENT)['report']
+    assert len(calls) == 1 and updated['ai']['model'] == 'deepseek-flash'
+    assert {k: v for k, v in updated.items() if k != 'ai'} == {k: v for k, v in old.items() if k != 'ai'}
+    assert before == {table.name: db.rows(select(table)) for table in (paper_accounts, trade_alerts, signals)}

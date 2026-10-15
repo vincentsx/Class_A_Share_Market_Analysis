@@ -41,7 +41,7 @@ def research_input(report, kind):
 
 def fingerprint(settings, report, kind):
     return hashlib.sha256(json.dumps([research_input(report, kind), settings.ai_model,
-        settings.ai_api_base_url, settings.ai_api_style, settings.realtime_ai_enabled, 'report-analysis-v1'],
+        settings.ai_api_base_url, settings.ai_api_style, settings.realtime_ai_enabled, 'report-analysis-v2'],
         ensure_ascii=False, sort_keys=True).encode()).hexdigest()
 
 

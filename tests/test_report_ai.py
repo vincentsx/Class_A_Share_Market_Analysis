@@ -41,8 +41,9 @@ def test_failed_report_ai_is_visible_and_retry_preserves_quote_cutoff(db, settin
     assert recovered['status'] == 'available' and recovered['as_of'] == result['as_of']
 
 
-def test_short_evidence_ids_restore_original_references_and_validate_stock_opinions(monkeypatch, settings):
-    config = replace(settings, ai_api_key='secret-key', ai_model='test-model', ai_api_style='chat_completions', ai_trading_enabled=True)
+@pytest.mark.parametrize('stream_finish', ['json', 'repair', 'stop', 'length', None])
+def test_short_evidence_ids_restore_original_references_and_validate_stock_opinions(monkeypatch, settings, stream_finish):
+    config = replace(settings, ai_api_key='secret-key', ai_model='deepseek-flash', ai_api_style='chat_completions', ai_trading_enabled=True)
     report = research_input(snapshot_payload(), 'close')
     report['decision_universe'] = ['600000.SH']
     report['evidence'].append({'id': 'stock-600000.SH', 'title': '模拟观察股', 'text': '报价与信号'})
@@ -56,14 +57,35 @@ def test_short_evidence_ids_restore_original_references_and_validate_stock_opini
         digest = {k: [{'text': '量价事实需核对', 'evidence_ids': ['E001']}] for k in ('overview','focus','risks','watchpoints')}
         digest['trade_policy'] = {'market_action': 'reduce', 'text': '市场风险升高', 'evidence_ids': ['E001'],
             'stocks': [{'code': '600000.SH', 'action': 'wait', 'score': 70, 'text': '等待报价确认', 'evidence_ids': [stock]}]}
-        return httpx.Response(200, json={'choices': [{'finish_reason':'stop','message':{'content':json.dumps(digest)}}]})
+        if stream_finish == 'repair' and len(seen) == 1:
+            digest['overview'][0]['evidence_ids'] = ['invented-reference']
+        if stream_finish in ('json', 'repair'):
+            return httpx.Response(200, json={'choices': [{'finish_reason':'stop','message':{'content':json.dumps(digest)}}]})
+        chunks = [': heartbeat', 'data: ' + json.dumps({'choices': [{'delta': {'reasoning_content': '不应展示的思考'}}]})]
+        content = json.dumps(digest)
+        for offset in range(0, len(content), 37):
+            chunks.append('data: ' + json.dumps({'choices': [{'delta': {'content': content[offset:offset+37]}}]}))
+        if stream_finish:
+            chunks.append('data: ' + json.dumps({'choices': [{'delta': {}, 'finish_reason': stream_finish}]}))
+        chunks.append('data: [DONE]')
+        return httpx.Response(200, headers={'content-type': 'text/event-stream'}, content='\n\n'.join(chunks))
     original = httpx.Client
     monkeypatch.setattr('stock_daily.realtime_ai.httpx.Client', lambda **kw:original(transport=httpx.MockTransport(respond)))
+    if stream_finish in ('length', None):
+        with pytest.raises(ValueError, match='未完整结束'):
+            analyze(config, report)
+        assert len(seen) == 2
+        return
     result = analyze(config, report)
     assert result['sections']['overview'][0]['evidence_ids'] == ['market']
     assert result['trade_policy']['stocks'][0]['evidence_ids'] == ['stock-600000.SH']
     assert result['trade_policy']['status'] == 'available'
     assert 'secret-key' not in str(seen)
+    assert seen[0]['reasoning_effort'] == 'high'
+    assert seen[0]['thinking'] == {'type': 'enabled'}
+    assert seen[0]['max_tokens'] == 16384
+    assert '不应展示的思考' not in str(result)
+    assert len(seen) == (2 if stream_finish == 'repair' else 1)
 
 
 def test_deployment_injects_only_matching_report_cutoff_from_public_ai_feed(populated, tmp_path):
@@ -105,3 +127,34 @@ def test_deployment_injects_only_matching_report_cutoff_from_public_ai_feed(popu
     module.refresh(folder, 'example/reports', Path('stock_daily').resolve(), live)
     for record in manifest['reports']:
         assert '未来证据不能写入旧报告' not in (folder / record['html']).read_text()
+
+
+@pytest.mark.parametrize('partial_failure', [False, True])
+def test_large_decision_pool_batches_preserve_complete_coverage_or_block_buys(settings, partial_failure):
+    from stock_daily.realtime_ai import analyze_batches
+
+    report = research_input(snapshot_payload(), 'close')
+    report['decision_universe'] = [f'{600000+i:06d}.SH' for i in range(25)]
+    report['evidence'] += [{'id': 'stock-' + code, 'title': code, 'text': '报价'} for code in report['decision_universe']]
+    seen = []
+    def model(config, part):
+        seen.append(part)
+        if partial_failure and part['decision_universe'][0] == '600012.SH':
+            raise ValueError('网关暂不可用')
+        result = fake_analysis(config, part)
+        result['trade_policy'] = {'status': 'available', 'version': 'evidence-decision-v1',
+            'market_action': 'reduce' if '600024.SH' in part['decision_universe'] else 'normal',
+            'text': '风险核验', 'evidence_ids': ['market'], 'stocks': [
+                {'code': code, 'action': 'wait', 'score': 60, 'text': '等待确认',
+                    'evidence_ids': ['stock-' + code]} for code in part['decision_universe']]}
+        return result
+    result = analyze_batches(settings, report, analyzer=model)
+    assert result['status'] == 'available' and result['batch_count'] == 3
+    assert len(seen) == 3 and all(len(p['decision_universe']) <= 12 for p in seen)
+    for part in seen:
+        assert {e['id'][6:] for e in part['evidence'] if e['id'].startswith('stock-')} == set(part['decision_universe'])
+    if partial_failure:
+        assert result['trade_policy']['status'] == 'failed'
+    else:
+        assert result['trade_policy']['market_action'] == 'reduce'
+        assert {i['code'] for i in result['trade_policy']['stocks']} == set(report['decision_universe'])
