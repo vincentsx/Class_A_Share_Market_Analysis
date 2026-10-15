@@ -102,6 +102,8 @@ def render_daily(payload, settings):
         css=(ASSETS / "static/style.css").read_text() + (ASSETS / "static/mail_report.css").read_text(),
         static_report=daily_view(payload),
         javascript=(ASSETS / "static/app.js").read_text(),
+        appearance_css=(ASSETS / "static/appearance.css").read_text(),
+        appearance_javascript=(ASSETS / "static/appearance.js").read_text(),
         snapshot=script_json(payload),
     )
     return text

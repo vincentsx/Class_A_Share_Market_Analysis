@@ -153,6 +153,8 @@ def render_snapshot(payload, settings):
     return env.get_template("snapshot.html").render(
         data=payload, snapshot=script_json(payload), nonce=secrets.token_urlsafe(24), cutoff=cutoff,
         public_report=payload.get("public", False),
+        appearance_css=(ASSETS / "static/appearance.css").read_text(),
+        appearance_javascript=(ASSETS / "static/appearance.js").read_text(),
         static_report=snapshot_view(payload),
         css=(ASSETS / "static/snapshot.css").read_text() + (ASSETS / "static/mail_report.css").read_text(),
         javascript=(ASSETS / "static/snapshot.js").read_text(),

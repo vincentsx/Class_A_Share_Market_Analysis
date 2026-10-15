@@ -149,6 +149,8 @@ def export_pages(db, settings, output="data/pages", render_image=None):
         atomic_write(stage / "index.html", env.get_template("pages.html").render(
             latest=latest, slots=slot_reports, dates=dates, reports=manifest["reports"], built_at=manifest["built_at"],
             live_url=next((e["payload"].get("live_url", "") for e in entries if e["slot"] == "portfolio"), ""),
+            appearance_css=(ASSETS / "static/appearance.css").read_text(),
+            appearance_javascript=(ASSETS / "static/appearance.js").read_text(),
             live_javascript=(ASSETS / "static/public_live.js").read_text()))
         from .realtime import render as render_realtime
         from .realtime import view as realtime_view

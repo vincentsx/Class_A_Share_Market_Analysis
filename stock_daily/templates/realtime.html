@@ -2,9 +2,9 @@
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer">
 <title>观市 · 盘中实时分析 · A股研究与模拟交易系统</title>
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-{{ nonce }}'; style-src 'nonce-{{ nonce }}'; connect-src {{ 'https://raw.githubusercontent.com https://api.github.com' if public else "'self'" }}; img-src data:; base-uri 'none'; form-action 'none'">
-<style nonce="{{ nonce }}">{{ css|safe }}</style></head><body>
+<style nonce="{{ nonce }}">{{ css|safe }}</style>{% include "appearance_head.html" %}</head><body class="realtime-page">
 <main data-endpoint="{{ endpoint }}">
-<header><a class="brand" href="{{ 'index.html' if public else '/' }}"><span class="brand-mark">◒</span><span>观市<small>A股研究与模拟交易系统</small></span></a><nav><a href="{{ 'portfolio.html' if public else '/?view=backtest' }}">模拟交易 ↗</a><a href="{{ 'evening.html' if public else '/' }}">日线研究</a></nav></header>
+<header><a class="brand" href="{{ 'index.html' if public else '/' }}"><span class="brand-mark">◒</span><span>观市<small>A股研究与模拟交易系统</small></span></a><div class="header-actions">{% include "appearance_control.html" %}<nav><a href="{{ 'portfolio.html' if public else '/?view=backtest' }}">模拟交易 ↗</a><a href="{{ 'evening.html' if public else '/' }}">日线研究</a></nav></div></header>
 <section class="hero"><div><span class="eyebrow">INTRADAY / 盘中观察</span><h1>看见变化，核对依据。</h1><p>行情、新闻舆情与AI研判，同一份带时间的市场切片。</p></div><div class="controls"><button id="refresh" type="button">↻ 同步最新分析</button><label>观察时点<select id="history"><option value="">跟随最新</option></select></label></div></section>
 <div id="sync-status" role="status" class="notice">交易时段每{{ data.interval_minutes }}分钟更新；正在读取已保存结果。</div>
 <div id="content">

@@ -267,6 +267,8 @@ def render(payload, settings, public=False):
     env = Environment(loader=FileSystemLoader(ASSETS / 'templates'), autoescape=select_autoescape(['html']))
     template_helpers(env)
     return env.get_template('realtime.html').render(data=payload, endpoint=endpoint, public=public,
+        appearance_css=(ASSETS / "static/appearance.css").read_text(),
+        appearance_javascript=(ASSETS / "static/appearance.js").read_text(),
         snapshot=script_json(payload), nonce=secrets.token_urlsafe(24),
         css=(ASSETS / 'static/realtime.css').read_text(),
         javascript=(ASSETS / 'static/realtime.js').read_text())

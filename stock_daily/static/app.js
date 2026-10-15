@@ -49,6 +49,7 @@ function message(text, isError = false) {
 async function load(day = selectedDay) {
   const id = ++refreshId;
   $("refresh").disabled = true;
+  $("refresh").setAttribute("aria-busy", "true");
   try {
     const data = await api(`/api/dashboard${day ? `?day=${encodeURIComponent(day)}` : ""}`);
     if (id !== refreshId) return;
@@ -95,7 +96,7 @@ async function load(day = selectedDay) {
     if (OFFLINE && $("static-report")) $("static-report").hidden = true;
     window.REPORT_READY = true;
   } catch (error) { message(error.message, true); }
-  finally { if (id === refreshId) $("refresh").disabled = false; }
+  finally { if (id === refreshId) { $("refresh").disabled = false; $("refresh").removeAttribute("aria-busy"); } }
 }
 
 function renderReport(data) {
@@ -113,7 +114,7 @@ function renderReport(data) {
   $("sector-chart").innerHTML = sectors.length ? sectors.map((s) => {
     const width = Math.max(1, Math.abs(s.relative20) / max * 140);
     const x = s.relative20 >= 0 ? 145 : 145 - width;
-    return `<div class="sector-row"><span>${esc(s.name)}<small>${s.count}</small></span><svg viewBox="0 0 290 18" role="img" aria-label="${esc(s.name)}相对强度${num(s.relative20)}个百分点"><rect x="0" y="5" width="290" height="8" rx="3" fill="#f5f7f2"/><line x1="145" y1="2" x2="145" y2="16" stroke="#d9e1d7"/><rect x="${num(x)}" y="5" width="${num(width)}" height="8" rx="2" fill="${s.relative20 >= 0 ? '#91ad83' : '#a5b8bd'}"/></svg><span class="sector-value ${color(s.relative20)}">${s.relative20 > 0 ? "+" : ""}${num(s.relative20)}</span></div>`;
+    return `<div class="sector-row"><span>${esc(s.name)}<small>${s.count}</small></span><svg viewBox="0 0 290 18" role="img" aria-label="${esc(s.name)}相对强度${num(s.relative20)}个百分点"><rect x="0" y="5" width="290" height="8" rx="3" fill="var(--surface-soft)"/><line x1="145" y1="2" x2="145" y2="16" stroke="var(--line)"/><rect x="${num(x)}" y="5" width="${num(width)}" height="8" rx="2" fill="${s.relative20 >= 0 ? 'var(--green)' : 'var(--blue)'}"/></svg><span class="sector-value ${color(s.relative20)}">${s.relative20 > 0 ? "+" : ""}${num(s.relative20)}</span></div>`;
   }).join("") : '<p class="muted">连续历史样本不足。</p>';
   $("quality-chip").textContent = q.status === "complete" ? "行情校验通过" : "部分行情缺失";
   $("quality-chip").className = `chip${q.status !== "complete" ? " amber" : ""}`;
@@ -559,13 +560,18 @@ function switchView(view) {
   currentView = view;
   const text = {overview:["每日复盘","把今天的市场，看清楚。","市场广度、行业强弱与值得跟踪的变化。"],watch:["我的自选","持续关注，你在意的变化。","趋势检查与公告提醒，保留每一次观察的依据。"],tracking:["信号跟踪","让判断，经得起时间检验。","记录信号发布后的变化，逐步积累真实的观察样本。"],backtest:["模拟持仓","查看持仓与资金变化。","盘中每10分钟更新已确认持仓估值，历史回测按日线核验。"]}[view];
   $("breadcrumb").textContent = text[0]; $("page-title").textContent = text[1]; $("subtitle").textContent = text[2];
-  document.querySelectorAll(".nav-item").forEach((b) => b.classList.toggle("active",b.dataset.view===view));
+  document.querySelectorAll(".nav-item").forEach((b) => {
+    const active = b.dataset.view === view;
+    b.classList.toggle("active", active);
+    if (active) b.setAttribute("aria-current", "page"); else b.removeAttribute("aria-current");
+  });
+  document.querySelector(".page-heading .eyebrow").textContent = {overview:"AFTER THE CLOSE",watch:"YOUR WATCHLIST",tracking:"SIGNAL TRACKING",backtest:"PAPER PORTFOLIO"}[view];
   document.querySelectorAll(".view").forEach((s) => s.hidden = s.id!==`view-${view}`);
   if (view === "tracking") loadTracking();
   if (view === "backtest") loadBacktest();
 }
 document.querySelectorAll(".nav-item[data-view]").forEach((b) => b.addEventListener("click",() => switchView(b.dataset.view)));
-document.querySelectorAll("[data-strategy]").forEach((b) => b.addEventListener("click",() => {strategy=b.dataset.strategy;document.querySelectorAll("[data-strategy]").forEach((s) => s.classList.toggle("active",s===b));renderCandidates();}));
+document.querySelectorAll("[data-strategy]").forEach((b) => b.addEventListener("click",() => {strategy=b.dataset.strategy;document.querySelectorAll("[data-strategy]").forEach((s) => {s.classList.toggle("active",s===b);s.setAttribute("aria-pressed",String(s===b));});renderCandidates();}));
 $("candidate-search").addEventListener("input",renderCandidates);
 $("candidate-scope").addEventListener("change",renderCandidates);
 $("candidate-table").addEventListener("click",(e) => {const b=e.target.closest(".row-detail");if(b)showDetail(b.dataset.code,b.dataset.rule);});

@@ -39,6 +39,10 @@ def refresh(folder, repository, assets, live_plan=None):
     fill_spec.loader.exec_module(fill_helpers)
     env = Environment(loader=FileSystemLoader(assets / 'templates'), autoescape=select_autoescape(['html']))
     helpers.template_helpers(env)
+    appearance = {
+        'appearance_css': (assets / 'static/appearance.css').read_text(),
+        'appearance_javascript': (assets / 'static/appearance.js').read_text(),
+    }
     for record in records:
         if record['slot'] in {'midday', 'close'}:
             path = (folder / record['html']).resolve()
@@ -55,7 +59,7 @@ def refresh(folder, repository, assets, live_plan=None):
                 cutoff=payload.get('scheduled_time') or ('11:35' if record['slot'] == 'midday' else '15:05'),
                 public_report=True, static_report=helpers.snapshot_view(payload),
                 css=(assets / 'static/snapshot.css').read_text() + (assets / 'static/mail_report.css').read_text(),
-                javascript=(assets / 'static/snapshot.js').read_text()))
+                javascript=(assets / 'static/snapshot.js').read_text(), **appearance))
             manifest['files'][record['html']] = hashlib.sha256(path.read_bytes()).hexdigest()
             continue
         if record['slot'] not in {'evening', 'portfolio'}:
@@ -85,7 +89,7 @@ def refresh(folder, repository, assets, live_plan=None):
             static_report=helpers.daily_view(payload, fill_history=fill_helpers.history_fills(
                 payload.get('backtest'), payload['dashboard']['source'])),
             javascript=(assets / 'static/app.js').read_text(),
-            snapshot=encode_snapshot(payload))
+            snapshot=encode_snapshot(payload), **appearance)
         path.write_text(html)
         manifest['files'][record['html']] = hashlib.sha256(path.read_bytes()).hexdigest()
     if portfolio:
@@ -102,11 +106,8 @@ def refresh(folder, repository, assets, live_plan=None):
         payload['live_url'] = endpoint
         encoded = encode_snapshot(payload)
         content = re.sub(pattern, lambda m: m[1] + encoded + m[3], content, count=1, flags=re.S)
-        javascript = (assets / 'static/app.js').read_text()
-        content, count = re.subn(r'(<script nonce="[A-Za-z0-9_-]{20,80}">).*?(</script>)',
-                                lambda m: m[1] + javascript + m[2], content, count=1, flags=re.S)
-        if count != 1:
-            raise ValueError('Missing public report script')
+        # The complete daily document was rendered above. Preserve its separate
+        # early appearance initializer and application script, both nonce-protected.
         content = re.sub(r'connect-src [^;]+', 'connect-src https://raw.githubusercontent.com https://api.github.com', content)
         content = content.replace('在线展示页每10分钟重载，部署完成后可看到更新。',
                                   '在线持仓每分钟检查轻量数据，行情每10分钟采集。')
@@ -133,7 +134,7 @@ def refresh(folder, repository, assets, live_plan=None):
     index.write_text(env.get_template('pages.html').render(
         latest=records[0], slots=slots, dates=sorted({r['day'] for r in records}, reverse=True),
         reports=records, built_at=manifest['built_at'], live_url=endpoint,
-        live_javascript=(assets / 'static/public_live.js').read_text()))
+        live_javascript=(assets / 'static/public_live.js').read_text(), **appearance))
     manifest['files']['index.html'] = hashlib.sha256(index.read_bytes()).hexdigest()
     # Render the new analysis entry even when reusing a bundle deployed before the feature existed.
     empty = {'version': 'realtime-analysis-v1', 'source': manifest['source'], 'report': None,
@@ -144,7 +145,7 @@ def refresh(folder, repository, assets, live_plan=None):
     analysis.write_text(env.get_template('realtime.html').render(
         data=empty, endpoint=endpoint, public=True, snapshot=encode_snapshot(empty),
         nonce=secrets.token_urlsafe(24), css=(assets / 'static/realtime.css').read_text(),
-        javascript=(assets / 'static/realtime.js').read_text()))
+        javascript=(assets / 'static/realtime.js').read_text(), **appearance))
     manifest['files']['realtime.html'] = hashlib.sha256(analysis.read_bytes()).hexdigest()
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2))
 
