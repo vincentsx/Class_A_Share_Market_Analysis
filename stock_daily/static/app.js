@@ -202,7 +202,7 @@ function renderTradePlan(plan) {
     ${plan.status === "blocked" ? `<p class="negative">${esc(plan.message)}${plan.stop ? ` ${esc(plan.stop.reason)}` : ""}</p>` : `
     ${plan.execution ? `<p class="trade-plan">盘中执行截至 ${clockLabel(plan.execution.confirmed_at)}（北京时间） · 已模拟买入 ${plan.execution.buys} 笔 · 已模拟卖出 ${plan.execution.sells} 笔</p>` : ""}
     <p>待尝试买入 ${(plan.entries || []).filter(i => i.status === "planned").length} 只 · 依赖卖出 ${(plan.entries || []).filter(i => i.status === "conditional").length} 只 · 待卖出 ${(plan.exits || []).filter(i => !i.execution).length} 只 · 继续持有 ${counts.holds || 0} 只 · 仅观察 ${counts.watch || 0} 条</p>
-    ${scenario ? `<p class="muted">现有现金 ${num(scenario.cash_before_sales)} 元 · 若全部待卖出成功，参考回款 ${num(scenario.reference_sale_proceeds)} 元、参考现金 ${num(scenario.reference_cash_after_sales)} 元。${esc(scenario.note)}</p>` : ""}
+    ${scenario ? `<p class="muted">原计划现金 ${num(scenario.cash_before_sales)} 元 · 按收盘参考价测算全部卖出时，参考回款 ${num(scenario.reference_sale_proceeds)} 元、参考现金 ${num(scenario.reference_cash_after_sales)} 元。${esc(scenario.note)}</p>` : ""}
     <h3>卖出计划与执行</h3><div class="research-grid">${(plan.exits || []).map(sell).join("") || '<p class="muted">暂无按当前规则需要退出的模拟持仓。</p>'}</div>
     <h3>待买入候选</h3><div class="research-grid">${actionable.map(buy).join("") || '<p class="muted">暂无满足参考资金与仓位条件的买入计划；查看下方仅观察原因。</p>'}</div>
     <details><summary>继续持有 · ${counts.holds || 0} 只</summary><div class="research-grid">${(plan.holds || []).map(hold).join("") || "暂无继续持有记录"}</div></details>
@@ -322,7 +322,7 @@ function openFillDetail(id) {
     ${sell && f.exit_trigger_day ? `<p>退出触发 ${dateLabel(f.exit_trigger_day)} · 当日收盘 ${num(f.exit_trigger_close,4)} 元。</p>` : ""}
     ${(f.exit_delays || []).length ? `<ul>${f.exit_delays.map((d) => `<li>${dateLabel(d.day)}：${esc(d.reason)}</li>`).join("")}</ul>` : ""}
     <p class="muted">成交编号 ${esc(f.id)}${f.sequence != null ? ` · 模拟执行序号 ${f.sequence}` : ""}</p>
-    <p class="muted">${f.origin === "legacy_derived" ? "此旧版成交由买卖明细恢复，未保存的执行顺序及成交后现金留空。 " : ""}日线模拟记录，没有实际撮合的分钟或秒级时间。</p>`;
+    <p class="muted">${f.origin === "legacy_derived" ? "此旧版成交由买卖明细恢复，未保存的执行顺序及成交后现金留空。 " : ""}${f.execution_time ? "盘中模拟记录，保存当时的报价及确认时间。" : "日线模拟记录，未保存分钟或秒级成交时间。"}</p>`;
   $("fill-dialog").showModal();
 }
 function exportFillHistory() {

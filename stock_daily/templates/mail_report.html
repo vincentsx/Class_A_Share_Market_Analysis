@@ -64,7 +64,7 @@
 {% if plan.status == 'blocked' %}<p>{{ plan.message }}{% if plan.get('stop') %} {{ plan.stop.reason }}{% endif %}</p>{% else %}
 {% if plan.get('execution') %}<p class="mail-note">盘中执行截至 {{ mail_time(plan.execution.confirmed_at) }} · 已模拟买入 {{ plan.execution.buys }} 笔 · 已模拟卖出 {{ plan.execution.sells }} 笔</p>{% endif %}
 <p>原计划尝试买入 {{ plan.counts.planned }} 只 · 依赖卖出 {{ plan.counts.conditional }} 只 · 原计划卖出 {{ plan.counts.exits }} 只 · 继续持有 {{ plan.counts.holds }} 只 · 仅观察 {{ plan.counts.watch }} 条</p>
-<p>现有现金 {{ mail_num(plan.scenario.cash_before_sales) }} 元；若全部待卖出成功，参考回款 {{ mail_num(plan.scenario.reference_sale_proceeds) }} 元。{{ plan.scenario.note }}</p>
+<p>原计划现金 {{ mail_num(plan.scenario.cash_before_sales) }} 元；按收盘参考价测算全部卖出时，参考回款 {{ mail_num(plan.scenario.reference_sale_proceeds) }} 元。{{ plan.scenario.note }}</p>
 <h3>卖出计划与执行</h3><div class="mail-grid">{% for i in plan.exits %}<article class="mail-card"><h3>{{ i.name }} · {{ i.code }} · {{ i.shares }} 股</h3>{{ plan_execution(i) }}<p>{{ i.reason }} · 触发 {{ i.exit_trigger_day }}<br>参考卖出价 {{ mail_num(i.reference_price, 4) }} 元 · 参考净回款 {{ mail_num(i.reference_proceeds) }} 元</p><ul>{% for condition in i.conditions %}<li>{{ condition }}</li>{% endfor %}</ul></article>{% else %}<p>暂无按规则需要退出的模拟持仓。</p>{% endfor %}</div>
 <h3>待买入候选</h3><div class="mail-grid">{% for i in plan.entries if i.status != 'watch' %}{{ planned_entry(i) }}{% else %}<p>暂无满足参考资金与仓位条件的买入计划。</p>{% endfor %}</div>
 <details><summary>继续持有 · {{ plan.holds|length }} 只</summary>{% for i in plan.holds %}<p>{{ i.name }} · {{ i.code }} · {{ i.shares }} 股 · 已持有 {{ i.held_sessions }} / {{ plan.parameters.holding_days }} 交易日 · 失效参考 {{ mail_num(i.invalidation_price, 4) }} 元<br>{{ i.reason }}</p>{% endfor %}</details>

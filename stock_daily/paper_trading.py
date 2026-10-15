@@ -371,10 +371,16 @@ def annotate_plan(plan, account):
     for item in plan.get("entries", []):
         if item["code"] in decisions:
             item["reason"] = "本次刷新：" + decisions[item["code"]]
+            if any(word in decisions[item["code"]] for word in ("取消", "排除", "不支持")):
+                item["status"] = "watch"
         fill = next((f for f in fills if f["side"] == "buy" and f["code"] == item["code"]
                      and f["strategy"] == item["strategy"] and f["signal_day"] == item["signal_day"]), None)
         if fill:
             item.update(status="filled", execution=fill, reason="已按有效盘中报价确认模拟买入")
+    plan["counts"] = {**plan.get("counts", {}),
+        **{status: sum(i["status"] == status for i in plan.get("entries", []))
+           for status in ("planned", "conditional", "watch")},
+        "exits": sum(not i.get("execution") for i in plan.get("exits", []))}
     plan["execution"] = {"confirmed_at": account["paper_trading"]["confirmed_at"],
         "buys": sum(f["side"] == "buy" for f in fills), "sells": sum(f["side"] == "sell" for f in fills)}
     return plan

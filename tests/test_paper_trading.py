@@ -194,3 +194,16 @@ def test_plan_overlay_and_live_api_do_not_rewrite_archive_or_show_future_sales(s
         assert len(current["fills"]) == len(daily["fills"]) + 2
         assert current["trade_plan"]["entries"][0]["status"] == "filled"
         assert client.get("/api/backtest?day=20261014&live=true&capital=50000").json()["parameters"]["capital"] == 50000
+
+
+def test_cancelled_entry_leaves_pending_plan_and_preserves_frozen_reference(settings, db):
+    report = setup(db)
+    plan = build_trade_plan(db, settings, report)
+    payload = quotes()
+    payload["quotes"]["600001.SH"].update(open=10.7, high=11)
+    execute_quotes(db, settings, payload, CURRENT)
+    overlay = annotate_plan(plan, current_account(db, settings, report["day"], CURRENT))
+    assert overlay["entries"][0]["status"] == "watch"
+    assert "取消" in overlay["entries"][0]["reason"]
+    assert overlay["counts"]["planned"] == overlay["counts"]["conditional"] == overlay["counts"]["exits"] == 0
+    assert plan["entries"][0]["status"] == "planned"

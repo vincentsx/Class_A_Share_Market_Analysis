@@ -272,6 +272,7 @@ def test_phone_updates_executed_positions_cash_and_plan_on_live_refresh(browser,
         page.locator('#fill-table button').first.click()
         assert '成交参考报价 10.3000' in page.locator('#fill-detail-body').inner_text()
         assert '确认 2026/10/15 10:00:00' in page.locator('#fill-detail-body').inner_text()
+        assert '日线模拟记录' not in page.locator('#fill-detail-body').inner_text()
         assert not page.evaluate('document.documentElement.scrollWidth > innerWidth')
         assert not errors
     account_db.engine.dispose()
