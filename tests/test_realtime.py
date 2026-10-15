@@ -268,8 +268,12 @@ def test_phone_realtime_ai_news_filters_history_and_refresh_without_reload(brows
         page.locator('#refresh').click()
         page.wait_for_function('() => document.getElementById("history").value === ""')
         assert not page.evaluate('document.documentElement.scrollWidth > innerWidth')
-        page.locator('.references').first.click()
-        assert page.locator('#evidence-market').is_visible()
+        reference = page.locator('.references').first
+        target = reference.get_attribute('href')
+        assert '本次行情' in reference.inner_text()
+        reference.click()
+        assert page.locator(target).is_visible()
+        assert '沪深300' in page.locator(target).inner_text()
         assert not errors
         page.unroute('https://raw.githubusercontent.com/**')
         page.route('https://raw.githubusercontent.com/**', lambda route: route.fulfill(json=first))

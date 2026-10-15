@@ -1,6 +1,8 @@
 """Readable report data for attachment viewers that do not execute scripts."""
 
+import json
 import math
+from pathlib import Path
 from urllib.parse import urlparse
 
 NEWS_LABELS = {
@@ -52,8 +54,83 @@ def time_label(value):
 def template_helpers(environment):
     environment.globals.update(mail_num=number, mail_pct=percent, mail_color=color,
                                mail_link=safe_link, mail_time=time_label,
+                               evidence_cards=evidence_cards,
+                               evidence_javascript=(Path(__file__).parent / 'static/evidence.js').read_text(),
                                mail_source_status=lambda s: SOURCE_LABELS.get(s, "状态待核对"),
                                mail_announcement_status=lambda s: ANNOUNCEMENT_LABELS.get(s, "状态待核对"))
+
+
+def evidence_cards(cards):
+    """Presentation only: keep source records and model citations unchanged."""
+    result = []
+    for index, card in enumerate(cards):
+        item = {'id': card['id'], 'number': index + 1, 'title': card.get('title') or '报告依据',
+                'kind': '报告资料', 'facts': [], 'groups': [], 'text': '',
+                'time': card.get('published_at'), 'sources': card.get('sources', [])}
+        try:
+            data = json.loads(card.get('text', ''))
+        except (ValueError, TypeError):
+            data = None
+        def fact(label, value, formatter=number):
+            if isinstance(value, (int, float)) and math.isfinite(value):
+                item['facts'].append({'label': label, 'value': formatter(value)})
+        def rows(title, entries, describe):
+            if entries:
+                item['groups'].append({'title': title, 'rows': [describe(e) for e in entries]})
+        def industry(row):
+            parts = []
+            for key, label, formatter in [('pct', '平均涨跌', percent), ('relative20', '近20日相对强度',
+                    lambda v: number(v) + ' 个百分点'), ('up_ratio', '上涨占比', lambda v: number(v, 1) + '%'),
+                    ('count', '样本', lambda v: number(v, 0) + '只'),
+                    ('amount', '成交额', lambda v: number(v / 1e8) + '亿元')]:
+                if row.get(key) is not None:
+                    parts.append(label + ' ' + formatter(row[key]))
+            if row.get('status'):
+                parts.append(row['status'])
+            return {'title': row.get('name', '行业样本'), 'text': ' · '.join(parts)}
+        if isinstance(data, dict):
+            if card['id'] == 'market':
+                item['kind'] = '行情数据'
+                market = data.get('market', data)
+                benchmark = market.get('benchmark') or {}
+                fact('沪深300', benchmark.get('price'), lambda v: number(v) + ' 点')
+                fact('指数涨跌', benchmark.get('pct', market.get('benchmark_pct')), percent)
+                for key, label in [('count', '报价样本'), ('up', '上涨'), ('down', '下跌'), ('flat', '平盘')]:
+                    fact(label, market.get(key), lambda v: number(v, 0) + ' 只')
+                fact('累计成交额', market.get('amount'), lambda v: number(v / 1e8) + ' 亿元')
+                fact('数据覆盖率', data.get('coverage'), lambda v: number(v) + '%')
+                item['time'] = data.get('as_of') or benchmark.get('quote_time')
+                item['text'] = '成交额为所标时点的累计值；盘中数据不代表全天结果。'
+            elif card['id'] == 'observations' or 'industries' in data:
+                item['kind'] = '行业与量价'
+                rows('行业观察', data.get('industries', []), industry)
+                rows('候选观察', data.get('candidates', []), lambda r: {'title': (r.get('name') or r['code']) + ' · ' + r['code'],
+                    'text': '；'.join(r.get('reasons') or []) or '报告中已留存的候选观察'})
+                rows('量价要点', (data.get('analysis') or {}).get('summaries', []),
+                    lambda text: {'title': '', 'text': text})
+            elif card['id'].startswith('sector-'):
+                item['kind'] = '行业数据'
+                rows('行业观察', [data], industry)
+            elif card['id'].startswith('stock-'):
+                item['kind'] = '个股数据'
+                quote = data.get('quote') or {}
+                fact('最新价', quote.get('price'), lambda v: number(v) + ' 元')
+                fact('开盘价', quote.get('open'), lambda v: number(v) + ' 元')
+                fact('涨跌幅', quote.get('pct'), percent)
+                fact('累计成交额', quote.get('amount'), lambda v: number(v / 1e8) + ' 亿元')
+                fact('模拟持仓', data.get('shares'), lambda v: number(v, 0) + ' 股')
+                item['time'] = quote.get('quote_time')
+                signal = data.get('signal') or {}
+                rows('观察条件', signal.get('reasons') or [], lambda text: {'title': '', 'text': text})
+                rows('风险线索', signal.get('risks') or [], lambda text: {'title': '', 'text': text})
+                item['text'] = '已有模拟持仓的报价依据。' if data.get('role') == 'holding' else '已发布候选的报价与信号依据。'
+            if not item['facts'] and not item['groups'] and not item['text']:
+                item['text'] = '该项暂无可读摘要，请核对原报告中的对应数据。'
+        else:
+            item['kind'] = '新闻报道' if card['id'].startswith('news-') else '报告资料'
+            item['text'] = card.get('text', '') if data is None else '请核对原报告中的对应数据。'
+        result.append(item)
+    return result
 
 
 def snapshot_view(payload):

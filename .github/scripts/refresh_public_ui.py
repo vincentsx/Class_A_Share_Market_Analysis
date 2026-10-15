@@ -147,6 +147,7 @@ def refresh(folder, repository, assets, live_plan=None):
     slots = {slot: next((r for r in records if r['slot'] == slot), None)
              for slot in ['portfolio', 'midday', 'close', 'evening']}
     env = Environment(loader=FileSystemLoader(assets / 'templates'), autoescape=select_autoescape(['html']))
+    helpers.template_helpers(env)
     index = folder / 'index.html'
     index.write_text(env.get_template('pages.html').render(
         latest=records[0], slots=slots, dates=sorted({r['day'] for r in records}, reverse=True),

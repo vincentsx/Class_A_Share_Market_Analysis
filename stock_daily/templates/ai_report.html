@@ -1,9 +1,15 @@
 {% set analysis = analysis or {} %}
+{% set sources = evidence_cards(analysis.get('evidence', [])) %}
 <section class="panel ai-report-panel">
   <div class="panel-heading"><div><h2>AI市场研判</h2><p>{{ analysis.get('message', '该报告的AI分析尚未生成；后台生成后随报告发布。') }}</p></div><span class="chip">{{ {'available':'分析已完成','failed':'分析未通过','disabled':'未启用','unconfigured':'待配置','not_generated':'待生成'}.get(analysis.get('status'), '等待分析') }}</span></div>
   <div class="research-body">
   {% if analysis.get('as_of') %}<p class="muted">依据截止 {{ mail_time(analysis.as_of) }} · 生成 {{ mail_time(analysis.get('generated_at')) }} · {{ analysis.get('model', '') }}</p>{% endif %}
-  {% if analysis.get('status') == 'available' %}<div class="research-grid ai-sections">{% for key, label in [('overview','市场研判'),('focus','关注方向'),('risks','主要风险'),('watchpoints','后续验证')] %}<article class="research-card"><h3>{{ label }}</h3>{% for item in analysis.sections.get(key, []) %}<p>{{ item.text }} <small>依据 {{ item.evidence_ids|join(' / ') }}</small></p>{% endfor %}</article>{% endfor %}</div>
-  <details><summary>核对分析依据</summary>{% for card in analysis.get('evidence', []) %}<article class="analysis-evidence"><b>{{ card.id }} · {{ card.title }}</b><p>{{ card.text }}</p>{% for source in card.get('sources', []) %}{% if mail_link(source.url) %}<a href="{{ mail_link(source.url) }}" target="_blank" rel="noopener noreferrer">{{ source.name }} ↗</a>{% endif %}{% endfor %}</article>{% endfor %}</details>{% endif %}
+  {% if analysis.get('status') == 'available' %}<div class="research-grid ai-sections">{% for key, label in [('overview','市场研判'),('focus','关注方向'),('risks','主要风险'),('watchpoints','后续验证')] %}<article class="research-card"><h3>{{ label }}</h3>{% for item in analysis.sections.get(key, []) %}<p>{{ item.text }}<span class="source-citations" aria-label="分析依据">{% for id in item.evidence_ids %}{% set matches = sources|selectattr('id', 'equalto', id)|list %}{% if matches %}{% set source = matches[0] %}<a class="evidence-ref" data-evidence-link href="#static-ai-source-{{ source.number }}" title="{{ source.title }}">[{{ source.number }}] {{ source.title }}</a>{% else %}<span class="muted">引用资料待核对</span>{% endif %}{% endfor %}</span></p>{% endfor %}</article>{% endfor %}</div>
+  <details class="analysis-sources"><summary>核对分析依据 · {{ sources|length }} 项</summary>{% for card in sources %}<article class="analysis-evidence" id="static-ai-source-{{ card.number }}" tabindex="-1"><div class="evidence-heading"><span class="evidence-number">{{ card.number }}</span><div><span class="evidence-kind">{{ card.kind }}</span><h4>{{ card.title }}</h4></div></div>
+  {% if card.time %}<p class="evidence-time">资料时点 {{ mail_time(card.time) }} · 北京时间</p>{% endif %}
+  {% if card.facts %}<dl class="evidence-facts">{% for fact in card.facts %}<div><dt>{{ fact.label }}</dt><dd>{{ fact.value }}</dd></div>{% endfor %}</dl>{% endif %}
+  {% if card.text %}<p class="evidence-summary">{{ card.text }}</p>{% endif %}
+  {% for group in card.groups %}<div class="evidence-group"><h5>{{ group.title }}</h5>{% for row in group.rows %}<div class="evidence-row">{% if row.title %}<b>{{ row.title }}</b>{% endif %}<p>{{ row.text }}</p></div>{% endfor %}</div>{% endfor %}
+  <div class="evidence-sources">{% for source in card.sources %}{% if mail_link(source.url) %}<a href="{{ mail_link(source.url) }}" target="_blank" rel="noopener noreferrer">{{ source.name }} ↗</a>{% else %}<span>{{ source.name }}</span>{% endif %}{% endfor %}</div></article>{% endfor %}</details>{% endif %}
   </div>
 </section>

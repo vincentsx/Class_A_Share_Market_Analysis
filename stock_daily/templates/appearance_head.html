@@ -1,2 +1,3 @@
 <style{% if nonce %} nonce="{{ nonce }}"{% endif %}>{{ appearance_css|safe }}</style>
 <script{% if nonce %} nonce="{{ nonce }}"{% endif %}>{{ appearance_javascript|safe }}</script>
+{% if evidence_javascript %}<script{% if nonce %} nonce="{{ nonce }}"{% endif %}>{{ evidence_javascript|safe }}</script>{% endif %}

@@ -4,12 +4,64 @@ from dataclasses import replace
 import httpx
 import pytest
 from sqlalchemy import select
+from test_mail_preview import browser as browser
 from test_mail_preview import snapshot_payload
 from test_realtime import fake_analysis
 
 from stock_daily.db import report_analyses
 from stock_daily.realtime_ai import analyze
 from stock_daily.report_ai import cached, generate, research_input
+
+
+@pytest.mark.parametrize('javascript', [False, True])
+@pytest.mark.parametrize('kind', ['snapshot', 'daily'])
+def test_report_citations_open_readable_sources_without_internal_ids_or_json(browser, populated, tmp_path, kind, javascript):
+    from stock_daily.html_export import daily_payload, render_daily
+    from stock_daily.intraday import render_snapshot
+
+    db, settings, _ = populated
+    payload = snapshot_payload()
+    evidence = research_input(payload, 'close')['evidence']
+    original = deepcopy(evidence)
+    analysis = fake_analysis(settings, {'captured_at': payload['captured_at'], 'evidence': evidence})
+    analysis['evidence'] = evidence
+    analysis['sections']['focus'] = [{'text': '核对相关报道与行业样本。',
+        'evidence_ids': [evidence[1]['id'], evidence[2]['id']]}]
+    if kind == 'snapshot':
+        payload['ai_analysis'] = analysis
+        html = render_snapshot(payload, settings)
+    else:
+        data = daily_payload(db, settings)
+        data['dashboard']['report_analysis'] = analysis
+        html = render_daily(data, settings)
+    path = tmp_path / (kind + '.html')
+    path.write_text(html)
+    with browser.new_context(viewport={'width': 390, 'height': 844}, java_script_enabled=javascript) as context:
+        page = context.new_page()
+        errors = []
+        page.on('pageerror', lambda error: errors.append(str(error)))
+        page.goto(path.as_uri())
+        if javascript:
+            page.wait_for_function('() => window.REPORT_READY === true')
+        panel = page.locator('.ai-report-panel:visible').first
+        link = panel.locator('.evidence-ref').first
+        assert '行情与数据范围' in link.inner_text()
+        target = link.get_attribute('href')
+        if javascript:
+            link.click()
+            assert page.locator(target).is_visible()
+            page.wait_for_function("id => { const r=document.getElementById(id).getBoundingClientRect(); return r.top>=0 && r.top<innerHeight; }", arg=target[1:])
+        else:
+            panel.locator('.analysis-sources > summary').click()
+        text = panel.inner_text()
+        assert '4,000.00 点' in text and '0.80 亿元' in text
+        assert '行业观察' in text and '示例行业' in text
+        assert 'news-' not in text and '"benchmark"' not in text and '"industries"' not in text
+        assert not panel.locator('a[href^="javascript:"]').count()
+        assert not page.evaluate('document.documentElement.scrollWidth > innerWidth')
+        assert not page.evaluate('Boolean(window.UNSAFE)')
+        assert not errors
+    assert evidence == original
 
 
 @pytest.mark.parametrize('kind', ['midday', 'close', 'daily'])
