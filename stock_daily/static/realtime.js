@@ -51,8 +51,15 @@ async function refresh(manual=false) {
     const url=new URL(endpoint,location.href);url.searchParams.set("v",String(Date.now()));
     if(archive&&!url.hostname.endsWith("githubusercontent.com"))url.searchParams.set("window",archive);
     let fresh;
-    try {fresh=await fetchData(url.href);}catch(error){
-      if(!url.hostname.endsWith("githubusercontent.com")||Date.now()-lastApiAttempt<120000)throw error;
+    try {
+      fresh=await fetchData(url.href);
+      const clock=new Intl.DateTimeFormat("sv-SE",{timeZone:"Asia/Shanghai",hour:"2-digit",minute:"2-digit",hour12:false}).format(new Date());
+      const trading=(clock>="09:30"&&clock<="11:30")||(clock>="13:00"&&clock<="15:05");
+      const older=latestData.report&&(!fresh.report||Date.parse(fresh.report.captured_at)<Date.parse(latestData.report.captured_at));
+      const delayed=trading&&fresh.report&&Date.now()-Date.parse(fresh.report.captured_at)>(data.interval_minutes+2)*60000;
+      if(!archive&&url.hostname.endsWith("githubusercontent.com")&&(older||delayed))throw new Error("缓存仍是较旧快照");
+    }catch(error){
+      if(!url.hostname.endsWith("githubusercontent.com")||Date.now()-lastApiAttempt<180000)throw error;
       lastApiAttempt=Date.now();const parts=url.pathname.split("/");
       fresh=await fetchData(`https://api.github.com/repos/${parts[1]}/${parts[2]}/contents/realtime.json?ref=pages-live&v=${Date.now()}`).then(r=>JSON.parse(decodeURIComponent(escape(atob(r.content.replace(/\s/g,""))))));
     }

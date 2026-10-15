@@ -1,3 +1,4 @@
+import base64
 import json
 from copy import deepcopy
 from dataclasses import replace
@@ -272,6 +273,46 @@ def test_phone_realtime_ai_news_filters_history_and_refresh_without_reload(brows
         assert not errors
         page.unroute('https://raw.githubusercontent.com/**')
         page.route('https://raw.githubusercontent.com/**', lambda route: route.fulfill(json=first))
+        calls = []
+        def fallback(route):
+            calls.append(route.request.url)
+            route.fulfill(json={'content': base64.b64encode(json.dumps(latest).encode()).decode()})
+        page.route('https://api.github.com/**', fallback)
         page.locator('#refresh').click()
-        page.wait_for_function('() => document.getElementById("sync-status").textContent.includes("较旧快照")')
+        page.wait_for_function('() => !document.getElementById("refresh").disabled')
+        assert len(calls) == 1
         assert page.evaluate('data.report.window') == latest['report']['window']
+
+
+def test_transient_ai_errors_retry_same_evidence_then_succeed(db, config, monkeypatch):
+    capture(db, config)
+    report = view(db, config, current=CURRENT)['report']
+    digest = fake_analysis(config, report)['sections']
+    original = httpx.Client
+    calls = []
+    def handler(request):
+        calls.append(json.loads(request.content))
+        if len(calls) < 3:
+            return httpx.Response(502 if len(calls) == 1 else 429, json={})
+        return httpx.Response(200, json={'choices': [{'finish_reason': 'stop',
+            'message': {'content': json.dumps(digest)}}]})
+    monkeypatch.setattr('stock_daily.realtime_ai.httpx.Client',
+        lambda **kwargs: original(transport=httpx.MockTransport(handler)))
+    monkeypatch.setattr('stock_daily.realtime_ai.time.sleep', lambda _: None)
+    assert analyze(config, report)['status'] == 'available'
+    assert len(calls) == 3 and calls[0] == calls[1] == calls[2]
+
+
+def test_operator_retry_uses_failed_snapshot_without_refetch_or_changing_capture_time(db, config):
+    def fail(*args):
+        raise ValueError('service unavailable')
+    capture(db, config, analyzer=fail)
+    old = deepcopy(view(db, config, current=CURRENT)['report'])
+    class Forbidden:
+        def fetch(self, *args):
+            pytest.fail('重试AI不得采集新行情或新闻')
+    run(db, config, feed=Forbidden(), news_feed=Forbidden(), analyzer=fake_analysis, current=CURRENT, retry_ai=True)
+    saved = view(db, config, current=CURRENT)['report']
+    assert saved['ai']['status'] == 'available'
+    assert saved['captured_at'] == old['captured_at'] and saved['news'] == old['news']
+    assert saved['evidence'] == old['evidence']

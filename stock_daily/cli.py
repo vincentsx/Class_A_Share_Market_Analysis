@@ -91,7 +91,8 @@ def main():
     saved_snapshot.add_argument("--date", help="YYYYMMDD，默认最新快照日期")
     saved_snapshot.add_argument("--slot", choices=("midday", "close"), help="指定快照时段")
     commands.add_parser("news", help="采集并留存免费滚动财经快讯，不发送邮件")
-    commands.add_parser("realtime", help="采集本交易时段的行情、新闻舆情与AI盘中分析；不执行交易")
+    realtime = commands.add_parser("realtime", help="采集本交易时段的行情、新闻舆情与AI盘中分析；不执行交易")
+    realtime.add_argument("--retry-ai", action="store_true", help="仅重试当前时点失败的AI分析，复用原行情与新闻")
     news_refresh = commands.add_parser("news-refresh", help="为当天已保存快照补充新闻，明确标记补采时间，不重新请求行情或发信")
     news_refresh.add_argument("--date", help="YYYYMMDD，默认北京时间当天")
     news_refresh.add_argument("--slot", choices=("midday", "close"), default="close")
@@ -248,7 +249,7 @@ def main():
         elif args.command == "realtime":
             from .realtime import run
 
-            result = run(db, settings)
+            result = run(db, settings, retry_ai=args.retry_ai)
         elif args.command == "backup":
             from .operations import backup_database
 

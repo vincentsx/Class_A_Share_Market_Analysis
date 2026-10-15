@@ -193,7 +193,7 @@ def build(db, settings, day, window, quotes, stocks, basis, captured):
     return report
 
 
-def run(db, settings, feed=None, news_feed=None, analyzer=None, current=None, on_saved=None):
+def run(db, settings, feed=None, news_feed=None, analyzer=None, current=None, on_saved=None, retry_ai=False):
     from .intraday import SinaQuotes
     from .realtime_ai import analyze
 
@@ -205,7 +205,8 @@ def run(db, settings, feed=None, news_feed=None, analyzer=None, current=None, on
         return {'status': 'skipped'}
     with db.lock('realtime:' + settings.source, lease_minutes=10):
         existing = db.rows(query_reports(settings, day, window).limit(1))
-        if existing and existing[0]['payload']['ai']['status'] != 'pending':
+        if existing and existing[0]['payload']['ai']['status'] != 'pending' and not (
+                retry_ai and existing[0]['payload']['ai']['status'] == 'failed'):
             return {'status': 'unchanged'}
         attempt = {'at': started.isoformat(), 'window': window, 'status': 'running'}
         db.save_state(settings.source, 'realtime_refresh', attempt)
@@ -213,6 +214,9 @@ def run(db, settings, feed=None, news_feed=None, analyzer=None, current=None, on
         try:
             if existing:
                 report = existing[0]['payload']
+                report['ai'] = {'status': 'pending', 'message': '正在基于原快照重新生成AI分析，行情与新闻截止时间保留'}
+                with db.engine.begin() as c:
+                    db.upsert(c, realtime_reports, {**existing[0], 'payload': report})
             else:
                 saved = db.rows(select(sessions).where(sessions.c.source == settings.source,
                     sessions.c.day < day).order_by(sessions.c.day.desc()).limit(1))

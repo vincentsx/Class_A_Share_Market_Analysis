@@ -1,6 +1,7 @@
 """Evidence-cited intraday interpretation; the model cannot execute trades."""
 
 import json
+import time
 
 import httpx
 
@@ -43,11 +44,26 @@ def analyze(settings, report):
             "instructions": instructions, "input": content, "text": {"format": {
                 "type": "json_schema", "name": "intraday_analysis", "strict": True, "schema": schema}}}
     try:
-        with httpx.Client(timeout=httpx.Timeout(120, connect=10), follow_redirects=False) as client:
-            response = client.post(settings.ai_api_base_url.rstrip("/") + path, json=request,
-                headers={"Authorization": f"Bearer {settings.ai_api_key}"})
-            if response.is_error:
-                raise ValueError("AI接口认证、额度或服务暂不可用；保留本次行情与新闻")
+        with httpx.Client(timeout=httpx.Timeout(75, connect=10), follow_redirects=False) as client:
+            for attempt in range(3):
+                try:
+                    response = client.post(settings.ai_api_base_url.rstrip("/") + path, json=request,
+                        headers={"Authorization": f"Bearer {settings.ai_api_key}"})
+                except httpx.TransportError:
+                    if attempt == 2:
+                        raise
+                    time.sleep(2 ** (attempt + 1))
+                    continue
+                if response.status_code == 429 or response.status_code >= 500:
+                    if attempt == 2:
+                        raise ValueError(f"AI服务暂不可用（HTTP {response.status_code}），已完成有限重试；保留本次行情与新闻")
+                    time.sleep(2 ** (attempt + 1))
+                    continue
+                if response.status_code in {401, 403}:
+                    raise ValueError("AI接口认证或模型权限未通过；请检查配置，行情与新闻已保留")
+                if response.is_error:
+                    raise ValueError(f"AI接口返回HTTP {response.status_code}；请检查模型与接口参数，行情与新闻已保留")
+                break
             data = response.json()
         if settings.ai_api_style == "chat_completions":
             choice = data["choices"][0]
