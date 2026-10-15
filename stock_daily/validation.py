@@ -85,7 +85,7 @@ def _cutoff(view, source, as_of):
 
 def _manifest(view, settings, cutoff, parameters):
     code = hashlib.sha256()
-    for name in ("backtest.py", "execution.py", "fills.py", "performance.py", "validation.py"):
+    for name in ("backtest.py", "execution.py", "fills.py", "paper_trading.py", "performance.py", "validation.py"):
         code.update(Path(__file__).with_name(name).read_bytes())
     return {"version": "research-v1", "execution_version": "cash-v2", "source": settings.source,
             "as_of": cutoff, "created_at": now().isoformat(), "data_fingerprint": view.fingerprint(),

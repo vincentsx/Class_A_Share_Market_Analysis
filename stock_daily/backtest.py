@@ -119,13 +119,19 @@ def position_value(position, mark):
             "net_return": (value / position["spent"] - 1) * 100}
 
 
-def simulate(db, settings, as_of=None, config=None):
+def simulate(db, settings, as_of=None, config=None, *, _research=False):
     config = config or simulation_profile()
     config.validate()
     if as_of:
         datetime.strptime(as_of, "%Y%m%d")
     if config.start_day and as_of and config.start_day > as_of:
         raise ValueError("模拟起始日期不能晚于截止日期")
+    if not _research and config == simulation_profile():
+        from .paper_trading import recorded_account
+
+        recorded = recorded_account(db, settings, as_of)
+        if recorded is not None:
+            return recorded
     saved_reports = db.rows(select(reports).where(reports.c.source == settings.source,
                                                    reports.c.day <= as_of if as_of else True)
                             .order_by(reports.c.day))

@@ -236,3 +236,42 @@ def test_deployment_keeps_old_portfolio_link_usable(populated, tmp_path):
     alias=folder/'reports/demo-20261014-portfolio.html'
     assert 'url=../portfolio.html' in alias.read_text()
     assert 'reports/demo-20261014-portfolio.html' in json.loads((folder/'manifest.json').read_text())['files']
+
+
+def test_phone_updates_executed_positions_cash_and_plan_on_live_refresh(browser, populated, tmp_path, monkeypatch):
+    from test_paper_trading import CURRENT, quotes, setup
+
+    from stock_daily.db import Database
+    from stock_daily.html_export import daily_payload, render_daily
+    from stock_daily.paper_trading import execute_quotes
+
+    db, settings, _ = populated
+    settings = replace(settings, pages_repository='example/reports')
+    html = render_daily(daily_payload(db, settings, public=True, portfolio=True), settings)
+    account_db = Database(f'sqlite:///{tmp_path / "paper.db"}')
+    setup(account_db)
+    execute_quotes(account_db, settings, quotes(), CURRENT)
+    monkeypatch.setattr('stock_daily.paper_trading.now', lambda: CURRENT)
+    live = public_portfolio(account_db, settings)
+    live['published_at'] = CURRENT.isoformat()
+    with browser.new_context(viewport={'width':390,'height':844}) as context:
+        page = context.new_page()
+        errors = []
+        page.on('pageerror', lambda error: errors.append(str(error)))
+        page.clock.install(time=CURRENT)
+        page.route('https://reports.example/**', lambda route: route.fulfill(content_type='text/html', body=html))
+        page.route('https://raw.githubusercontent.com/**', lambda route: route.fulfill(json=live))
+        page.goto('https://reports.example/reports/portfolio.html')
+        page.wait_for_function('document.querySelector("#trade-count")?.textContent.includes("持仓 1 · 已卖出 1")')
+        assert '已模拟买入 1 笔 · 已模拟卖出 1 笔' in page.locator('#trade-plan-content').inner_text()
+        assert '10:00:00' in page.locator('.trade-card[data-status="open"]').inner_text()
+        assert '盘中报价模拟' in page.locator('.trade-card[data-status="closed"]').inner_text()
+        cash = live['backtest']['summary']['available_cash']
+        assert f'{cash:.2f}' in page.locator('[data-account-field=available_cash]').inner_text()
+        page.locator('#show-fill-history').click()
+        page.locator('#fill-table button').first.click()
+        assert '成交参考报价 10.3000' in page.locator('#fill-detail-body').inner_text()
+        assert '确认 2026/10/15 10:00:00' in page.locator('#fill-detail-body').inner_text()
+        assert not page.evaluate('document.documentElement.scrollWidth > innerWidth')
+        assert not errors
+    account_db.engine.dispose()

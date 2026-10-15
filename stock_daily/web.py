@@ -88,7 +88,14 @@ def create_app(settings=None, database=None):
 
     @app.get("/api/dashboard")
     def get_dashboard(day: str | None = Query(default=None, pattern=r"^\d{8}$")):
-        return dashboard(database, settings, day)
+        data = dashboard(database, settings, day)
+        if day is None and data.get("report"):
+            from .paper_trading import annotate_plan, current_account
+
+            account = current_account(database, settings, data["report"]["day"])
+            if account:
+                data["report"]["trade_plan"] = annotate_plan(data["report"].get("trade_plan"), account)
+        return data
 
     @app.get("/api/tracking")
     def get_tracking(day: str | None = Query(default=None, pattern=r"^\d{8}$")):
@@ -126,9 +133,15 @@ def create_app(settings=None, database=None):
                 cohort=cohort, split_day=split_day, start_day=start_day, **risk_options)
             result = simulate(database, settings, day, config)
             if live:
+                from .paper_trading import annotate_plan, current_account
                 from .portfolio import value_portfolio
 
-                result["valuation"] = value_portfolio(database, settings, result)
+                latest = database.latest_report(settings.source)
+                if config == simulation_profile() and latest and (day is None or day == latest["day"]):
+                    result = current_account(database, settings, latest["day"]) or result
+                    result["trade_plan"] = annotate_plan(latest.get("trade_plan"), result)
+                if "valuation" not in result:
+                    result["valuation"] = value_portfolio(database, settings, result)
             return result
         except ValueError as error:
             raise HTTPException(422, str(error)) from None

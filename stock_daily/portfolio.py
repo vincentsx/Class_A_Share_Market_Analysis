@@ -79,9 +79,13 @@ def refresh_portfolio(db, settings, feed=None, provider=None, current=None):
         payload = {"day": day, "captured_at": current.isoformat(), "quotes": quotes,
                    "missing": missing, "provider": "新浪免费实时行情"}
         db.save_state(settings.source, "portfolio_quotes", payload)
+        from .paper_trading import execute_quotes
+
+        execution = execute_quotes(db, settings, payload, current)
         attempt["status"] = "success"
-        db.finish_run(identifier, "success", f"盘中估值报价已更新：{len(quotes)}个代码；模拟成交仍按日线核验")
-        return {**attempt, "count": len(quotes)}
+        db.finish_run(identifier, "success", f"盘中报价已更新：{len(quotes)}个代码；"
+                      f"新增{execution.get('new_fills', 0)}笔模拟成交；{execution['status']}")
+        return {**attempt, "count": len(quotes), "execution": execution}
     except Exception:
         attempt["status"] = "failed"
         db.finish_run(identifier, "failed", "盘中报价更新失败，保留上次行情；未改写日线或模拟成交")

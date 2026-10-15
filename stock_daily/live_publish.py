@@ -30,11 +30,16 @@ def public_portfolio(db, settings):
     if not report:
         raise DataError("尚无已发布日线账户，不发布空持仓数据")
     simulation = simulate(db, settings, report["day"])
-    simulation["valuation"] = value_portfolio(db, settings, simulation)
+    from .paper_trading import annotate_plan, current_account
+
+    simulation = current_account(db, settings, report["day"]) or simulation
+    if "valuation" not in simulation:
+        simulation["valuation"] = value_portfolio(db, settings, simulation)
     valuation = simulation["valuation"]
     from .trade_plan import build_trade_plan
 
     plan = report.get("trade_plan") or build_trade_plan(db, settings, report)
+    plan = annotate_plan(plan, simulation)
     return {"version": VERSION, "source": settings.source, "report_day": report["day"],
             "data_at": valuation.get("captured_at", report.get("generated_at", "")),
             "backtest": simulation, "trade_plan": plan}

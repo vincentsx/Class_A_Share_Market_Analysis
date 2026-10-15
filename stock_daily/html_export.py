@@ -73,9 +73,13 @@ def daily_payload(db, settings, day=None, public=False, portfolio=False):
 
     simulation = simulate(db, settings, report["day"]) if report else None
     if portfolio and simulation:
+        from .paper_trading import annotate_plan, current_account
         from .portfolio import value_portfolio
 
-        simulation["valuation"] = value_portfolio(db, settings, simulation)
+        simulation = current_account(db, settings, report["day"]) or simulation
+        if "valuation" not in simulation:
+            simulation["valuation"] = value_portfolio(db, settings, simulation)
+        data["report"]["trade_plan"] = annotate_plan(data["report"].get("trade_plan"), simulation)
     from .live_publish import live_url
 
     return {"dashboard": data, "tracking": observations, "histories": histories,

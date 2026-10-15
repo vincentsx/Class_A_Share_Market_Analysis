@@ -59,6 +59,12 @@ system_state = Table(
     Column("key", String(40), primary_key=True),
     Column("payload", JSON, nullable=False),
 )
+paper_accounts = Table(
+    "paper_accounts", metadata,
+    Column("source", String(20), primary_key=True),
+    Column("day", String(8), primary_key=True),
+    Column("payload", JSON, nullable=False),
+)
 news_items = Table(
     "news_items", metadata,
     Column("provider", String(20), primary_key=True),

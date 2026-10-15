@@ -21,9 +21,10 @@ def performance(curve, trades, positions, capital):
             longest = max(longest, underwater)
     turnover = sum(t["shares"] * (t["entry_price"] + t["exit_price"]) for t in trades)
     turnover += sum(p["shares"] * p["entry_price"] for p in positions)
-    slippage = sum(t["shares"] * (t["entry_price"] - t["entry_open"] + t["exit_open"] - t["exit_price"])
+    slippage = sum(t["shares"] * (t["entry_price"] - t.get("entry_reference_price", t["entry_open"])
+                                + t.get("exit_reference_price", t["exit_open"]) - t["exit_price"])
                    for t in trades)
-    slippage += sum(p["shares"] * (p["entry_price"] - p["entry_open"]) for p in positions)
+    slippage += sum(p["shares"] * (p["entry_price"] - p.get("entry_reference_price", p["entry_open"])) for p in positions)
     contributions = defaultdict(lambda: {"realized_profit": 0, "unrealized_profit": 0, "closed_trades": 0})
     for trade in trades:
         item = contributions[trade["strategy"]]
