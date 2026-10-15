@@ -40,6 +40,24 @@ def refresh(folder, repository, assets, live_plan=None):
     env = Environment(loader=FileSystemLoader(assets / 'templates'), autoescape=select_autoescape(['html']))
     helpers.template_helpers(env)
     for record in records:
+        if record['slot'] in {'midday', 'close'}:
+            path = (folder / record['html']).resolve()
+            if not path.is_relative_to(folder.resolve()) or path.is_symlink():
+                raise ValueError('Invalid public report path')
+            match = re.search(r'<script id="quote-snapshot" type="application/json">(.*?)</script>', path.read_text(), re.S)
+            if not match:
+                continue  # An older alias can share a daily HTML file; preserve its existing document.
+            payload = json.loads(match[1])
+            if not payload.get('public'):
+                raise ValueError('Snapshot must be public')
+            path.write_text(env.get_template('snapshot.html').render(
+                data=payload, snapshot=encode_snapshot(payload), nonce=secrets.token_urlsafe(24),
+                cutoff=payload.get('scheduled_time') or ('11:35' if record['slot'] == 'midday' else '15:05'),
+                public_report=True, static_report=helpers.snapshot_view(payload),
+                css=(assets / 'static/snapshot.css').read_text() + (assets / 'static/mail_report.css').read_text(),
+                javascript=(assets / 'static/snapshot.js').read_text()))
+            manifest['files'][record['html']] = hashlib.sha256(path.read_bytes()).hexdigest()
+            continue
         if record['slot'] not in {'evening', 'portfolio'}:
             continue
         path = (folder / record['html']).resolve()
@@ -105,7 +123,7 @@ def refresh(folder, repository, assets, live_plan=None):
             if not alias_path.exists():
                 alias_path.write_text('<!doctype html><html lang="zh-CN"><meta charset="utf-8">'
                                      '<meta http-equiv="refresh" content="0;url=../portfolio.html">'
-                                     '<title>最新模拟持仓</title><a href="../portfolio.html">打开最新模拟持仓</a></html>')
+                                     '<title>观市 · A股研究与模拟交易系统 · 最新模拟持仓</title><a href="../portfolio.html">打开最新模拟持仓</a></html>')
                 manifest['files'][alias] = hashlib.sha256(alias_path.read_bytes()).hexdigest()
 
     slots = {slot: next((r for r in records if r['slot'] == slot), None)
@@ -117,6 +135,17 @@ def refresh(folder, repository, assets, live_plan=None):
         reports=records, built_at=manifest['built_at'], live_url=endpoint,
         live_javascript=(assets / 'static/public_live.js').read_text()))
     manifest['files']['index.html'] = hashlib.sha256(index.read_bytes()).hexdigest()
+    # Render the new analysis entry even when reusing a bundle deployed before the feature existed.
+    empty = {'version': 'realtime-analysis-v1', 'source': manifest['source'], 'report': None,
+             'history': [], 'status': 'unavailable', 'interval_minutes': 10, 'refresh': {},
+             'message': '正在同步盘中分析；交易时段每10分钟更新。'}
+    endpoint = f'https://raw.githubusercontent.com/{repository}/pages-live/realtime.json'
+    analysis = folder / 'realtime.html'
+    analysis.write_text(env.get_template('realtime.html').render(
+        data=empty, endpoint=endpoint, public=True, snapshot=encode_snapshot(empty),
+        nonce=secrets.token_urlsafe(24), css=(assets / 'static/realtime.css').read_text(),
+        javascript=(assets / 'static/realtime.js').read_text()))
+    manifest['files']['realtime.html'] = hashlib.sha256(analysis.read_bytes()).hexdigest()
     manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2))
 
 

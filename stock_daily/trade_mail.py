@@ -31,7 +31,7 @@ def compose_trade(settings, event):
     message = EmailMessage(policy=policy.SMTP)
     name = " ".join(str(fill["name"]).split())
     message["Subject"] = f"[模拟成交·{side}] {name}（{fill['code']}）{fill['shares']}股 · {fill['day']}"
-    message["From"] = Address("收盘之后", addr_spec=settings.smtp_username)
+    message["From"] = Address("观市", addr_spec=settings.smtp_username)
     message["To"] = Address(addr_spec=settings.mail_to)
     message["Date"] = format_datetime(now())
     message["Message-ID"] = f"<stock-daily.trade.{event['id']}@{settings.smtp_username.rsplit('@', 1)[1]}>"

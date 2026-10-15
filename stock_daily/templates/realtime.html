@@ -1,0 +1,14 @@
+<!doctype html>
+<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><meta name="referrer" content="no-referrer">
+<title>观市 · 盘中实时分析 · A股研究与模拟交易系统</title>
+<meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-{{ nonce }}'; style-src 'nonce-{{ nonce }}'; connect-src {{ 'https://raw.githubusercontent.com https://api.github.com' if public else "'self'" }}; img-src data:; base-uri 'none'; form-action 'none'">
+<style nonce="{{ nonce }}">{{ css|safe }}</style></head><body>
+<main data-endpoint="{{ endpoint }}">
+<header><a class="brand" href="{{ 'index.html' if public else '/' }}"><span class="brand-mark">◒</span><span>观市<small>A股研究与模拟交易系统</small></span></a><nav><a href="{{ 'portfolio.html' if public else '/?view=backtest' }}">模拟交易 ↗</a><a href="{{ 'evening.html' if public else '/' }}">日线研究</a></nav></header>
+<section class="hero"><div><span class="eyebrow">INTRADAY / 盘中观察</span><h1>看见变化，核对依据。</h1><p>行情、新闻舆情与AI研判，同一份带时间的市场切片。</p></div><div class="controls"><button id="refresh" type="button">↻ 同步最新分析</button><label>观察时点<select id="history"><option value="">跟随最新</option></select></label></div></section>
+<div id="sync-status" role="status" class="notice">交易时段每{{ data.interval_minutes }}分钟更新；正在读取已保存结果。</div>
+<div id="content">
+{% if data.report %}{% set r = data.report %}<div id="static-preview"><p>采集 {{ mail_time(r.captured_at) }} · 行情 {{ mail_time(r.quote_start) }}～{{ mail_time(r.quote_end) }} · 新闻截至 {{ mail_time(r.news.as_of) }}</p><div class="metrics"><article><span>沪深300</span><strong>{{ mail_pct(r.market.benchmark.pct) }}</strong></article><article><span>上涨家数占比</span><strong>{{ mail_num(r.market.up_ratio, 1) }}%</strong></article><article><span>累计成交额</span><strong>{{ mail_num(r.market.amount / 1e8, 0) }}亿</strong></article><article><span>报价覆盖</span><strong>{{ mail_num(r.coverage, 1) }}%</strong></article></div><section class="panel"><h2>AI盘中研判</h2>{% if r.ai.status == 'available' %}{% for key, label in [('overview','市场研判'),('focus','关注方向'),('risks','主要风险'),('watchpoints','后续验证')] %}<h3>{{ label }}</h3>{% for item in r.ai.sections[key] %}<p>{{ item.text }}</p>{% endfor %}{% endfor %}{% else %}<p>{{ r.ai.message }}</p>{% endif %}</section><section class="panel"><h2>新闻与舆情线索</h2><p>{{ r.sentiment.method }}</p>{% for item in r.news['items'][:12] %}<p>{{ item.title }} · {{ mail_time(item.published_at) }}</p>{% endfor %}</section></div>{% else %}<section id="static-preview" class="panel"><h2>等待首份盘中分析</h2><p>交易时段采集行情与公开快讯；原有模拟交易继续独立运行。</p></section>{% endif %}
+</div>
+<footer>观市 · 每个判断，保留当时的依据。<br>新闻舆情来自已采集的公开报道，不代表全网讨论或投资者情绪调查。AI分析不自动改变交易规则。</footer>
+</main><script id="realtime-data" type="application/json">{{ snapshot|safe }}</script><script nonce="{{ nonce }}">{{ javascript|safe }}</script></body></html>

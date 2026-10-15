@@ -32,6 +32,9 @@ class Settings:
     schedule_time: str = "15:05"
     announcement_time: str = "18:30"
     portfolio_interval_minutes: int = 10
+    realtime_enabled: bool = True
+    realtime_interval_minutes: int = 10
+    realtime_ai_enabled: bool = True
     history_sessions: int = 100
     min_amount: float = 50_000_000
     min_coverage: float = 0.98
@@ -87,6 +90,9 @@ class Settings:
             schedule_time=os.getenv("SCHEDULE_TIME", "15:05"),
             announcement_time=os.getenv("ANNOUNCEMENT_TIME", cls.announcement_time),
             portfolio_interval_minutes=int(os.getenv("PORTFOLIO_INTERVAL_MINUTES", "10")),
+            realtime_enabled=os.getenv("REALTIME_ENABLED", "true").lower() == "true",
+            realtime_interval_minutes=int(os.getenv("REALTIME_INTERVAL_MINUTES", "10")),
+            realtime_ai_enabled=os.getenv("REALTIME_AI_ENABLED", "true").lower() == "true",
             history_sessions=int(os.getenv("HISTORY_SESSIONS", "100")),
             min_amount=float(os.getenv("MIN_AMOUNT_YUAN", "50000000")),
             min_coverage=float(os.getenv("MIN_COVERAGE", "0.98")),
@@ -134,6 +140,8 @@ class Settings:
             raise ValueError("候选数量、成交额或请求间隔配置无效")
         if not 5 <= config.portfolio_interval_minutes <= 60:
             raise ValueError("PORTFOLIO_INTERVAL_MINUTES需为5～60分钟")
+        if not 5 <= config.realtime_interval_minutes <= 60:
+            raise ValueError("REALTIME_INTERVAL_MINUTES需为5～60分钟")
         for value in (config.midday_time, config.schedule_time, config.announcement_time):
             datetime.strptime(value, "%H:%M")
         if not "11:30" <= config.midday_time < "13:00":

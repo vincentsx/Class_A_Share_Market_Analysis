@@ -150,12 +150,17 @@ def export_pages(db, settings, output="data/pages", render_image=None):
             latest=latest, slots=slot_reports, dates=dates, reports=manifest["reports"], built_at=manifest["built_at"],
             live_url=next((e["payload"].get("live_url", "") for e in entries if e["slot"] == "portfolio"), ""),
             live_javascript=(ASSETS / "static/public_live.js").read_text()))
+        from .realtime import render as render_realtime
+        from .realtime import view as realtime_view
+
+        # A stable shell follows a separate lightweight feed; no PNG or full-site rebuild per tick.
+        atomic_write(stage / "realtime.html", render_realtime(realtime_view(db, settings), settings, public=True))
         for alias, report in {"latest": latest, **slot_reports}.items():
             if report:
                 # Controlled relative filenames work under a GitHub project subpath.
                 atomic_write(stage / f"{alias}.html", '<!doctype html><html lang="zh-CN"><meta charset="utf-8">'
                              f'<meta http-equiv="refresh" content="0;url={report["html"]}">'
-                             f'<title>{report["label"]}</title><a href="{report["html"]}">打开报告</a></html>')
+                             f'<title>观市 · A股研究与模拟交易系统 · {report["label"]}</title><a href="{report["html"]}">打开报告</a></html>')
         atomic_write(stage / ".nojekyll", "")
         for file in sorted(stage.rglob("*")):
             if file.is_file():

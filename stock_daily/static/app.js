@@ -564,7 +564,7 @@ function switchView(view) {
   if (view === "tracking") loadTracking();
   if (view === "backtest") loadBacktest();
 }
-document.querySelectorAll(".nav-item").forEach((b) => b.addEventListener("click",() => switchView(b.dataset.view)));
+document.querySelectorAll(".nav-item[data-view]").forEach((b) => b.addEventListener("click",() => switchView(b.dataset.view)));
 document.querySelectorAll("[data-strategy]").forEach((b) => b.addEventListener("click",() => {strategy=b.dataset.strategy;document.querySelectorAll("[data-strategy]").forEach((s) => s.classList.toggle("active",s===b));renderCandidates();}));
 $("candidate-search").addEventListener("input",renderCandidates);
 $("candidate-scope").addEventListener("change",renderCandidates);
@@ -586,7 +586,7 @@ $("watch-table").addEventListener("click",async (e) => {
   if (edit) { openPlan(edit.dataset.code); return; }
   const b=e.target.closest(".remove-watch");if(!b)return;const key=window.prompt(`移除 ${b.dataset.code}：请输入 APP_API_KEY`);if(!key)return;try{await api(`/api/watchlist/${b.dataset.code}`,{method:"DELETE",headers:{Authorization:`Bearer ${key}`}});await load();}catch(error){message(error.message,true);}
 });
-load().then(() => { if (OFFLINE?.portfolio) { switchView("backtest"); refreshPublicPortfolio(); } });
+load().then(() => { if (OFFLINE?.portfolio) { switchView("backtest"); refreshPublicPortfolio(); } else if (!OFFLINE && new URLSearchParams(location.search).get("view") === "backtest") switchView("backtest"); });
 setInterval(() => {
   if (!OFFLINE && state && !document.hidden && !document.querySelector("dialog[open]") && !$("refresh").disabled && !$("backtest-form").querySelector("button").disabled) load();
 }, 30000);

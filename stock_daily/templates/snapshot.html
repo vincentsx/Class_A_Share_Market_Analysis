@@ -1,8 +1,8 @@
 <!doctype html>
 <html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-{{ nonce }}'; style-src 'nonce-{{ nonce }}'; img-src data:; connect-src 'none'; base-uri 'none'; form-action 'none'">
-<title>{{ data.day }} · {{ data.label }} · 收盘之后</title><style nonce="{{ nonce }}">{{ css | safe }}</style></head>
-<body><main><header><div class="brand">◒ 收盘之后 <small>A SHARE OBSERVATIONS</small></div><span class="pill">{{ data.label }} · {{ cutoff }} 任务</span></header>
+<title>观市 · A股研究与模拟交易系统 · {{ data.day }} · {{ data.label }}</title><style nonce="{{ nonce }}">{{ css | safe }}</style></head>
+<body><main><header><div class="brand">◒ 观市 <small>A SHARE OBSERVATIONS</small></div><span class="pill">{{ data.label }} · {{ cutoff }} 任务</span></header>
 <div class="heading"><div><div class="eyebrow">{{ 'MIDDAY REVIEW' if data.slot == 'midday' else 'CLOSING SNAPSHOT' }}</div><h1>{{ '追踪上午热点，看清量价变化。' if data.slot == 'midday' else '热点是否延续，量价是否转向。' }}</h1><p>{{ data.day[:4] }}-{{ data.day[4:6] }}-{{ data.day[6:] }} · 北京时间 · {{ data.quote_provider }}</p></div><div class="stamp">行情时间范围<br><strong>{{ data.quote_start[11:19] }} — {{ data.quote_end[11:19] }}</strong><br>采集 {{ data.captured_at[:19].replace('T',' ') }}</div></div>
 {% with mail=static_report %}{% include "mail_report.html" %}{% endwith %}
 <div id="interactive-report" hidden>

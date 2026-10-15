@@ -74,10 +74,12 @@ def parse_quotes(text, expected, day, slot, captured):
 
 
 class SinaQuotes:
-    def __init__(self, settings):
+    def __init__(self, settings, max_seconds=None):
         self.settings = settings
+        self.max_seconds = max_seconds
 
     def fetch(self, codes, day, slot):
+        started = time.monotonic()
         all_rows, missing = {}, {}
         requested = sorted(set(codes) | {"000300.SH"})
         with httpx.Client(timeout=min(self.settings.free_timeout, 30),
@@ -86,6 +88,8 @@ class SinaQuotes:
                 batch = requested[start:start + 180]
                 symbols = ",".join(c[-2:].lower() + c[:6] for c in batch)
                 for attempt in range(3):
+                    if self.max_seconds is not None and time.monotonic() - started >= self.max_seconds:
+                        raise DataError("实时行情采集超过总时限，保留上次分析")
                     try:
                         response = client.get("https://hq.sinajs.cn/list=" + symbols)
                         response.raise_for_status()

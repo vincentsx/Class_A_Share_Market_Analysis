@@ -3,7 +3,7 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1">
-  <title>收盘之后 · {{ '本地离线报告' if offline else 'A股研究台' }}</title>
+  <title>观市 · A股研究与模拟交易系统{{ ' · 离线报告' if offline else '' }}</title>
   {% if offline %}
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; script-src 'nonce-{{ nonce }}'; style-src 'nonce-{{ nonce }}'; img-src data:; connect-src {{ ('https://raw.githubusercontent.com https://api.github.com' if live_feed else "'none'")|safe }}; base-uri 'none'; form-action 'none'">
   <style nonce="{{ nonce }}">{{ css|safe }}</style>
@@ -15,17 +15,18 @@
 </head>
 <body>
   <aside class="sidebar">
-    <a class="brand" href="{{ '#' if offline else '/' }}"><span class="brand-mark">↗</span><span>收盘之后<small>STOCK DAILY</small></span></a>
+    <a class="brand" href="{{ '#' if offline else '/' }}"><span class="brand-mark">↗</span><span>观市<small>MARKET OBSERVATORY</small></span></a>
     <div class="workspace-label">研究工作台</div>
     <nav aria-label="主导航">
+      <a class="nav-item realtime-link" href="{{ '../realtime.html' if offline and public_report else '/realtime' }}"><span>◉</span>盘中实时分析</a>
       <button class="nav-item active" data-view="overview"><span>◫</span>每日复盘</button>
       <button class="nav-item" data-view="watch"{% if public_report %} hidden{% endif %}><span>☆</span>我的自选</button>
       <button class="nav-item" data-view="tracking"><span>⌁</span>信号跟踪</button>
       <button class="nav-item" data-view="backtest"><span>↗</span>模拟持仓</button>
     </nav>
-    <div class="sidebar-note"><span class="status-dot"></span> 盘后研究 · 几天至几周<p>从数据到依据，<br>让每一次观察都有记录。</p></div>
+    <div class="sidebar-note"><span class="status-dot"></span> 盘中观察 · 日线研究<p>从数据到依据，<br>让每一次观察都有记录。</p></div>
     <button id="method-button" class="method-button">规则与数据说明 <span>↗</span></button>
-    <div class="sidebar-footer">A 股 / 日频 <span>v0.2</span></div>
+    <div class="sidebar-footer">A 股 / 盘中与日线 <span>v0.2</span></div>
   </aside>
   <main>
     <header class="topbar"><span class="breadcrumb">研究台 <span>/</span> <b id="breadcrumb">每日复盘</b></span>
@@ -68,7 +69,7 @@
             </div>
           </section></section>
       </div>
-      <footer class="page-footer"><span>收盘之后 · 可解释的每日研究</span><span>数据有截止时间，判断有失效条件。</span></footer>
+      <footer class="page-footer"><span>观市 · 可解释的每日研究</span><span>数据有截止时间，判断有失效条件。</span></footer>
     </div>
   </main>
   <dialog id="detail-dialog"><div class="dialog-heading"><div><span id="detail-code" class="eyebrow"></span><h2 id="detail-title"></h2></div><button class="icon-button close-dialog" aria-label="关闭">×</button></div><div id="detail-body"></div></dialog>

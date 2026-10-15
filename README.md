@@ -1,4 +1,4 @@
-# 收盘之后 · A股研究与模拟交易系统
+# 观市 · A股研究与模拟交易系统
 
 本地优先的 A 股研究与模拟交易工具，面向持有几天至几周的交易研究。支持午间与收盘观察、日线分析、信号跟踪、模拟买卖明细、盘中模拟执行、持仓估值和下一交易日模拟交易计划，帮助核对决策依据与后续结果。
 
@@ -6,7 +6,7 @@
 
 **[打开展示网页 →](https://vincentsx.github.io/Class_A_Share_Market_Analysis/)**
 
-[模拟持仓 · 盘中估值](https://vincentsx.github.io/Class_A_Share_Market_Analysis/portfolio.html) · [最新报告](https://vincentsx.github.io/Class_A_Share_Market_Analysis/latest.html) · [午间快照](https://vincentsx.github.io/Class_A_Share_Market_Analysis/midday.html) · [收盘快照](https://vincentsx.github.io/Class_A_Share_Market_Analysis/close.html) · [日线研究与模拟持仓](https://vincentsx.github.io/Class_A_Share_Market_Analysis/evening.html)
+[盘中实时分析](https://vincentsx.github.io/Class_A_Share_Market_Analysis/realtime.html) · [模拟持仓 · 盘中估值](https://vincentsx.github.io/Class_A_Share_Market_Analysis/portfolio.html) · [最新报告](https://vincentsx.github.io/Class_A_Share_Market_Analysis/latest.html) · [午间快照](https://vincentsx.github.io/Class_A_Share_Market_Analysis/midday.html) · [收盘快照](https://vincentsx.github.io/Class_A_Share_Market_Analysis/close.html) · [日线研究与模拟持仓](https://vincentsx.github.io/Class_A_Share_Market_Analysis/evening.html)
 
 无需本地安装，手机和电脑均可查看已发布报告、历史归档，以及下载 HTML / PNG。日线报告包含下一交易日模拟交易计划、信号跟踪、模拟买卖明细和持仓资金概览；数据日期与估值截止时间以页面标注为准。
 
@@ -638,6 +638,23 @@ docker compose -f compose.yaml -f deploy/compose.postgres.yaml exec app python -
 ```
 
 SQLite和PostgreSQL数据库不会自动迁移数据。建议对持久数据库定期备份。SQLite备份用 Python `sqlite3.Connection.backup()` 或 SQLite `.backup`，不要在任务运行中只复制主DB文件而忽略WAL。PostgreSQL使用 `pg_dump`。
+
+## 盘中实时分析
+
+“观市”提供独立的[盘中分析页面](https://vincentsx.github.io/Class_A_Share_Market_Analysis/realtime.html)，本地访问 `/realtime`。交易日09:30～11:30、13:00～15:00每10分钟更新，15:05保存一次收盘观察；午休、休市期间保留最后结果并标明时间。数据范围为缓存的沪深A股及沪深300，展示报价覆盖率、上涨广度、累计成交额、MA20参考、行业强弱和量价观察。累计成交量不会外推成全天成交量，历史或复权口径不完整时指标留空。
+
+公开新闻沿用东方财富与财联社，保留发布、首次收录、采集截止时间和原文链接。“新闻舆情线索”按去重报道统计主题提及、风险事项、传闻/澄清和政策报道；仅代表已采集报道，不包含股吧或社交媒体评论，不把提及热度当作投资者看多比例。来源故障及旧新闻会标明状态，缺少风险报道不等于没有风险。
+
+每次成功采集后自动调用现有AI配置，输出市场研判、关注方向、主要风险和后续验证；每项必须引用本次行情或新闻证据ID，结构或引用校验失败则不展示该次结论。AI分析时间与行情、新闻截止时间分别显示，不使用旧AI结果代替新时点。正常运行每时点调用一次，读取页面和手动同步不调用模型；会产生所配模型服务的调用费用。盘中快照持久保存，本地可查看最近100个观察时点，公开轻量数据提供最近最多4个时点（数据过大时缩减，以保证同步可用）（历史新闻列表保留24条，引用证据保留）。
+
+```dotenv
+REALTIME_ENABLED=true
+REALTIME_INTERVAL_MINUTES=10
+REALTIME_AI_ENABLED=true
+# 复用已有AI_API_KEY、AI_MODEL、AI_API_BASE_URL和AI_API_STYLE
+```
+
+`.venv/bin/python -m stock_daily realtime` 立即处理当前交易时点；同一时点重复执行复用已存结果，不回补过去行情。独立线程采集和分析，AI等待不会阻塞模拟交易及邮件/企业微信成交通知；该页面不会自动修改买卖规则或生成证券委托。公开页面每分钟检查独立 `realtime.json` 轻量数据，失败保留当前结果；无需每10分钟重新部署全站。Git提交信息按项目约定使用中文。
 
 ## 模拟持仓的盘中更新
 

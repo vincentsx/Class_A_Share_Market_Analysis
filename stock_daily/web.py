@@ -32,7 +32,7 @@ def create_app(settings=None, database=None):
         yield
         database.engine.dispose()
 
-    app = FastAPI(title="Stock Daily · A股盘后分析", version="0.2.0", lifespan=lifespan)
+    app = FastAPI(title="观市 · A股研究与模拟交易系统", version="0.2.0", lifespan=lifespan)
     app.state.settings, app.state.db = settings, database
     app.mount("/static", StaticFiles(directory=ROOT / "static"), name="static")
     templates = Jinja2Templates(directory=ROOT / "templates")
@@ -69,6 +69,24 @@ def create_app(settings=None, database=None):
         with database.engine.connect() as connection:
             connection.execute(text("SELECT 1"))
         return {"status": "ok", "source": settings.source}
+
+    @app.get("/api/realtime")
+    def realtime_data(day: str | None = Query(default=None, pattern=r"^\d{8}$"),
+                      window: str | None = Query(default=None, pattern=r"^\d{8}-(?:\d{4}|close)$")):
+        from .realtime import view
+
+        return view(database, settings, day=day, window=window)
+
+    @app.get("/realtime", response_class=HTMLResponse)
+    def realtime_page():
+        from .realtime import render, view
+
+        # The standalone page owns a per-response nonce policy, like exported reports.
+        html = render(view(database, settings), settings)
+        nonce = re.search(r'nonce="([A-Za-z0-9_-]{20,80})"', html)[1]
+        return HTMLResponse(html, headers={"Cache-Control": "no-store", "Content-Security-Policy":
+            f"default-src 'self'; script-src 'nonce-{nonce}'; style-src 'nonce-{nonce}'; "
+            "img-src data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'none'"})
 
     @app.get("/artifacts/{filename}")
     def artifact(filename: str):

@@ -86,7 +86,7 @@ def health_view(db, settings, current=None):
     stages = []
     for kind, label in [("daily", "日线采集"), ("midday", "午间快照"), ("close", "收盘快照"),
                         ("evening", "日线分析与导出"), ("valuation", "盘中持仓估值"), ("export", "HTML / PNG导出"),
-                        ("email", "邮件发送"), ("pages", "公开网站发布")]:
+                        ("email", "邮件发送"), ("pages", "公开网站发布"), ("realtime", "盘中实时分析")]:
         records = db.rows(select(runs).where(runs.c.source == settings.source, runs.c.kind == kind)
                           .order_by(runs.c.started_at.desc()).limit(1))
         stages.append({"kind": kind, "label": label, **(records[0] if records else {"status": "not_run"})})
@@ -119,7 +119,9 @@ def health_view(db, settings, current=None):
             pass
     from .wecom import status_view
 
-    return {"wecom": status_view(db, settings), "checked_at": current.isoformat(), "worker": {**heartbeat, "status": worker_status,
+    return {"realtime": state(db, settings, "realtime_refresh"),
+            "realtime_publish": state(db, settings, "realtime_publish"),
+            "wecom": status_view(db, settings), "checked_at": current.isoformat(), "worker": {**heartbeat, "status": worker_status,
                                                            "age_seconds": age},
             "latest_daily": latest_daily[0]["day"] if latest_daily else None,
             "latest_snapshot": latest_snapshot[0] if latest_snapshot else None,

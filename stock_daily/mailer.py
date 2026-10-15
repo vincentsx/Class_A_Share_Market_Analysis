@@ -96,8 +96,8 @@ def compose_message(settings, day, slot, html, png, details=None, preview=False)
     marker = '【合成示例】' if settings.source == 'demo' else ''
     date = f'{day[:4]}-{day[4:6]}-{day[6:]}'
     cutoff = {'midday':settings.midday_time, 'close':settings.schedule_time, 'evening':settings.announcement_time}[slot]
-    message['Subject'] = f'{marker}[收盘之后] {date} {SLOTS[slot]} · {cutoff}'
-    message['From'] = Address('收盘之后', addr_spec=sender)
+    message['Subject'] = f'{marker}[观市] {date} {SLOTS[slot]} · {cutoff}'
+    message['From'] = Address('观市', addr_spec=sender)
     message['To'] = Address(addr_spec=recipient)
     message['Date'] = format_datetime(now())
     message['Message-ID'] = f'<stock-daily.{identifier}@{sender.rsplit("@", 1)[1]}>'

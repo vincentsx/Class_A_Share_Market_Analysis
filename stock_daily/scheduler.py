@@ -119,6 +119,7 @@ def worker(db, settings):
     quotes = threading.Thread(target=_portfolio_loop, args=(db, settings, stopped), daemon=True)
     alerts = threading.Thread(target=_trade_mail_loop, args=(db, settings, stopped), daemon=True)
     wecom = threading.Thread(target=_wecom_loop, args=(db, settings, stopped), daemon=True)
+    realtime = threading.Thread(target=_realtime_loop, args=(db, settings, stopped), daemon=True)
     # The single-process worker lock is released by the OS even after a crash.
     if db.engine.dialect.name == "sqlite":
         import fcntl
@@ -147,6 +148,7 @@ def worker(db, settings):
         quotes.start()
         alerts.start()
         wecom.start()
+        realtime.start()
         _worker_loop(db, settings, stopped, activity)
     finally:
         stopped.set()
@@ -154,6 +156,7 @@ def worker(db, settings):
         quotes.join(timeout=5)
         alerts.join(timeout=5)
         wecom.join(timeout=5)
+        realtime.join(timeout=5)
         try:
             db.save_state(settings.source, "worker", {"at": now().isoformat(), "status": "stopped",
                                                       "phase": "已停止", "pid": os.getpid()})
@@ -203,6 +206,32 @@ def _portfolio_loop(db, settings, stopped):
                 publish_portfolio(db, settings)
             except Exception:
                 logger.warning("公开持仓轻量同步未完成，将重试；盘中采集继续", exc_info=True)
+        stopped.wait(30)
+
+
+def _realtime_loop(db, settings, stopped):
+    """Full-scope quotes, public news and AI never block the paper execution thread."""
+    from .live_publish import publish_realtime
+    from .realtime import due, run
+
+    checked = None
+
+    def publish():
+        if settings.pages_enabled:
+            try:
+                publish_realtime(db, settings)
+            except Exception:
+                logger.warning("盘中分析公开同步未完成，稍后重试；保留已保存结果")
+
+    while not stopped.is_set():
+        try:
+            if due(db, settings, now()):
+                run(db, settings, on_saved=publish)
+        except Exception:
+            logger.exception("盘中分析未完成；模拟交易和成交通知继续独立运行")
+        if settings.realtime_enabled and (checked is None or now() - checked >= timedelta(minutes=1)):
+            checked = now()
+            publish()
         stopped.wait(30)
 
 

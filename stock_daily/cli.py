@@ -16,7 +16,7 @@ from .web import validate_code
 
 
 def main():
-    parser = argparse.ArgumentParser(description="A股每日复盘与信号观察")
+    parser = argparse.ArgumentParser(description="观市 · A股研究与模拟交易系统")
     commands = parser.add_subparsers(dest="command", required=True)
     daily = commands.add_parser("run", help="采集历史和当天行情，生成盘后报告")
     daily.add_argument("--date", help="YYYYMMDD，默认北京时间当天")
@@ -91,6 +91,7 @@ def main():
     saved_snapshot.add_argument("--date", help="YYYYMMDD，默认最新快照日期")
     saved_snapshot.add_argument("--slot", choices=("midday", "close"), help="指定快照时段")
     commands.add_parser("news", help="采集并留存免费滚动财经快讯，不发送邮件")
+    commands.add_parser("realtime", help="采集本交易时段的行情、新闻舆情与AI盘中分析；不执行交易")
     news_refresh = commands.add_parser("news-refresh", help="为当天已保存快照补充新闻，明确标记补采时间，不重新请求行情或发信")
     news_refresh.add_argument("--date", help="YYYYMMDD，默认北京时间当天")
     news_refresh.add_argument("--slot", choices=("midday", "close"), default="close")
@@ -244,6 +245,10 @@ def main():
             from .wecom import retry_notification
 
             result = retry_notification(db, settings, args.id)
+        elif args.command == "realtime":
+            from .realtime import run
+
+            result = run(db, settings)
         elif args.command == "backup":
             from .operations import backup_database
 

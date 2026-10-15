@@ -72,6 +72,14 @@ paper_quote_batches = Table(
     Column("captured_at", String(40), primary_key=True),
     Column("payload", JSON, nullable=False),
 )
+realtime_reports = Table(
+    "realtime_reports", metadata,
+    Column("source", String(20), primary_key=True),
+    Column("day", String(8), primary_key=True),
+    Column("window", String(20), primary_key=True),
+    Column("captured_at", String(40), nullable=False),
+    Column("payload", JSON, nullable=False),
+)
 news_items = Table(
     "news_items", metadata,
     Column("provider", String(20), primary_key=True),
@@ -268,7 +276,7 @@ class Database:
         )
 
     @contextmanager
-    def lock(self, source):
+    def lock(self, source, lease_minutes=360):
         owner = uuid.uuid4().hex
         key = f"pipeline:{source}"
         acquired = False
@@ -280,12 +288,12 @@ class Database:
                     locks.insert().values(
                         key=key,
                         owner=owner,
-                        expires=(now() + timedelta(hours=6)).isoformat(),
+                        expires=(now() + timedelta(minutes=lease_minutes)).isoformat(),
                     )
                 )
             acquired = True
         except IntegrityError:
-            raise BusyError("已有采集任务运行中；异常退出的任务锁最长6小时后过期") from None
+            raise BusyError(f"已有采集任务运行中；异常退出的任务锁最长{lease_minutes}分钟后过期") from None
         try:
             yield
         finally:
