@@ -111,6 +111,22 @@ trade_alerts = Table(
     Column("payload", JSON, nullable=False),
     Column("created_at", String(40), nullable=False),
 )
+wecom_outbox = Table(
+    "wecom_outbox", metadata,
+    Column("id", String(64), primary_key=True),
+    Column("source", String(20), nullable=False),
+    Column("event_id", String(64), nullable=False),
+    Column("target_hash", String(64), nullable=False),
+    Column("chat_id", String(320), nullable=False),
+    Column("content", Text, nullable=False),
+    Column("status", String(20), nullable=False),
+    Column("attempts", Integer, nullable=False),
+    Column("created_at", String(40), nullable=False),
+    Column("next_attempt_at", String(40), nullable=False),
+    Column("last_attempt_at", String(40)),
+    Column("sent_at", String(40)),
+    Column("last_error", Text, nullable=False),
+)
 snapshots = Table(
     "snapshots", metadata,
     Column("source", String(20), primary_key=True),

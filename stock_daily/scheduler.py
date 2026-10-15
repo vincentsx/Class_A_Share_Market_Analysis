@@ -118,6 +118,7 @@ def worker(db, settings):
     heartbeat = threading.Thread(target=pulse, daemon=True)
     quotes = threading.Thread(target=_portfolio_loop, args=(db, settings, stopped), daemon=True)
     alerts = threading.Thread(target=_trade_mail_loop, args=(db, settings, stopped), daemon=True)
+    wecom = threading.Thread(target=_wecom_loop, args=(db, settings, stopped), daemon=True)
     # The single-process worker lock is released by the OS even after a crash.
     if db.engine.dialect.name == "sqlite":
         import fcntl
@@ -145,12 +146,14 @@ def worker(db, settings):
         heartbeat.start()
         quotes.start()
         alerts.start()
+        wecom.start()
         _worker_loop(db, settings, stopped, activity)
     finally:
         stopped.set()
         heartbeat.join(timeout=5)
         quotes.join(timeout=5)
         alerts.join(timeout=5)
+        wecom.join(timeout=5)
         try:
             db.save_state(settings.source, "worker", {"at": now().isoformat(), "status": "stopped",
                                                       "phase": "已停止", "pid": os.getpid()})
@@ -158,6 +161,12 @@ def worker(db, settings):
                 guard.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": lock_id})
         finally:
             guard.close()
+
+
+def _wecom_loop(db, settings, stopped):
+    from .wecom import run
+
+    run(db, settings, stopped)
 
 
 def _trade_mail_loop(db, settings, stopped):

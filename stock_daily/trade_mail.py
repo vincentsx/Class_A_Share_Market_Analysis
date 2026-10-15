@@ -17,7 +17,7 @@ from .mailer import require_configuration
 
 def record_alerts(connection, settings, fills, current):
     """Called in the account commit: a rollback also removes notification events."""
-    if not settings.trade_email_enabled:
+    if not settings.trade_email_enabled and not (settings.wecom_bot_id and settings.wecom_bot_secret):
         return
     for fill in fills:
         identifier = hashlib.sha256(("trade:" + fill["id"]).encode()).hexdigest()

@@ -117,7 +117,9 @@ def health_view(db, settings, current=None):
             pages["dispatched_at"] = dispatch.get("dispatched_at")
         except (OSError, ValueError):
             pass
-    return {"checked_at": current.isoformat(), "worker": {**heartbeat, "status": worker_status,
+    from .wecom import status_view
+
+    return {"wecom": status_view(db, settings), "checked_at": current.isoformat(), "worker": {**heartbeat, "status": worker_status,
                                                            "age_seconds": age},
             "latest_daily": latest_daily[0]["day"] if latest_daily else None,
             "latest_snapshot": latest_snapshot[0] if latest_snapshot else None,

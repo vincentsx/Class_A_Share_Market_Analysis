@@ -42,6 +42,12 @@ class Settings:
     html_report_dir: str = "./data/html"
     email_enabled: bool = False
     trade_email_enabled: bool = True
+    wecom_bot_id: str = field(default="", repr=False)
+    wecom_bot_secret: str = field(default="", repr=False)
+    wecom_ws_url: str = "wss://openws.work.weixin.qq.com"
+    wecom_chat_id: str = field(default="", repr=False)
+    wecom_pair_code: str = field(default="", repr=False)
+    wecom_chat_type: str = "single"
     smtp_host: str = "smtp.gmail.com"
     smtp_port: int = 465
     smtp_security: str = "ssl"
@@ -91,6 +97,12 @@ class Settings:
             html_report_dir=os.getenv("HTML_REPORT_DIR", "./data/html"),
             email_enabled=os.getenv("EMAIL_ENABLED", "false").lower() == "true",
             trade_email_enabled=os.getenv("TRADE_EMAIL_ENABLED", "true").lower() == "true",
+            wecom_bot_id=os.getenv("WECOM_BOT_ID", "").strip(),
+            wecom_bot_secret=os.getenv("WECOM_BOT_SECRET", "").strip(),
+            wecom_ws_url=os.getenv("WECOM_WS_URL", cls.wecom_ws_url).strip() or cls.wecom_ws_url,
+            wecom_chat_id=os.getenv("WECOM_CHAT_ID", "").strip(),
+            wecom_pair_code=os.getenv("WECOM_PAIR_CODE", "").strip(),
+            wecom_chat_type=os.getenv("WECOM_CHAT_TYPE", "single").strip(),
             smtp_host=os.getenv("SMTP_HOST", "smtp.gmail.com").strip(),
             smtp_port=int(os.getenv("SMTP_PORT", "465")),
             smtp_security=os.getenv("SMTP_SECURITY", "ssl").lower(),
@@ -136,6 +148,13 @@ class Settings:
             raise ValueError("PAGES_RETAIN_DAYS需为1～20个报告日期")
         if not 1 <= config.backup_retain_days <= 90:
             raise ValueError("BACKUP_RETAIN_DAYS需为1～90")
+        wecom = urlsplit(config.wecom_ws_url)
+        if config.wecom_bot_id and config.wecom_bot_secret and (
+                wecom.scheme != "wss" or not wecom.hostname or wecom.username or wecom.password
+                or wecom.query or wecom.fragment):
+            raise ValueError("WECOM_WS_URL需为不含账号、查询参数和片段的wss地址")
+        if config.wecom_chat_type not in {"single", "group"}:
+            raise ValueError("WECOM_CHAT_TYPE需为single或group")
         endpoint = urlsplit(config.ai_api_base_url)
         if (endpoint.scheme != "https" or not endpoint.hostname or endpoint.username or endpoint.password
                 or endpoint.query or endpoint.fragment):

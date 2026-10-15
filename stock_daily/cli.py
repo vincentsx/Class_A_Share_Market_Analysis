@@ -36,6 +36,10 @@ def main():
     commands.add_parser("evening", help="执行完整日线分析、补查公告并导出HTML/PNG")
     commands.add_parser("track", help="输出已保存信号的观察统计")
     commands.add_parser("health", help="查看worker心跳、任务阶段和备份状态")
+    commands.add_parser("wecom-status", help="查看企业微信连接、绑定和成交提醒状态，不显示凭据或接收者")
+    commands.add_parser("wecom-pair", help="生成30分钟有效的企业微信一次性绑定口令")
+    wecom_retry = commands.add_parser("wecom-retry", help="重新排队当前会话的失败成交提醒")
+    wecom_retry.add_argument("id")
     commands.add_parser("backup", help="立即生成一致性数据库备份，不发送邮件")
     archive = commands.add_parser("repair-archive", help="按冻结指标重建旧版遗漏候选，保留原始已发布依据")
     archive.add_argument("--date")
@@ -228,6 +232,18 @@ def main():
             from .operations import health_view
 
             result = health_view(db, settings)
+        elif args.command == "wecom-status":
+            from .wecom import status_view
+
+            result = status_view(db, settings)
+        elif args.command == "wecom-pair":
+            from .wecom import create_pairing
+
+            result = create_pairing(db, settings)
+        elif args.command == "wecom-retry":
+            from .wecom import retry_notification
+
+            result = retry_notification(db, settings, args.id)
         elif args.command == "backup":
             from .operations import backup_database
 
