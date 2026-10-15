@@ -276,3 +276,44 @@ def test_phone_updates_executed_positions_cash_and_plan_on_live_refresh(browser,
         assert not page.evaluate('document.documentElement.scrollWidth > innerWidth')
         assert not errors
     account_db.engine.dispose()
+
+
+def test_phone_shows_exit_protection_and_intraday_trigger_without_false_close_label(browser, populated, tmp_path, monkeypatch):
+    from datetime import timedelta
+
+    from test_paper_trading import CURRENT, quotes, setup
+
+    from stock_daily.db import Database
+    from stock_daily.html_export import daily_payload, render_daily
+    from stock_daily.paper_trading import execute_quotes
+
+    db, settings, _ = populated
+    settings = replace(settings, pages_repository='example/reports')
+    html = render_daily(daily_payload(db, settings, public=True, portfolio=True), settings)
+    account_db = Database(f'sqlite:///{tmp_path / "exit-phone.db"}')
+    setup(account_db)
+    execute_quotes(account_db, settings, quotes(), CURRENT)
+    later = CURRENT + timedelta(minutes=10)
+    payload = quotes(later)
+    payload['quotes']['600001.SH'].update(price=9.6, low=9.5)
+    execute_quotes(account_db, settings, payload, later)
+    monkeypatch.setattr('stock_daily.paper_trading.now', lambda: later)
+    live = public_portfolio(account_db, settings)
+    live['published_at'] = later.isoformat()
+    with browser.new_context(viewport={'width':390,'height':844}) as ctx:
+        page = ctx.new_page()
+        errors = []
+        page.on('pageerror', lambda e: errors.append(str(e)))
+        page.clock.install(time=later)
+        page.route('https://reports.example/**', lambda route: route.fulfill(content_type='text/html', body=html))
+        page.route('https://raw.githubusercontent.com/**', lambda route: route.fulfill(json=live))
+        page.goto('https://reports.example/reports/portfolio.html')
+        card = page.locator('.trade-card[data-code="600001.SH"][data-status="open"]')
+        card.filter(has_text='盘中风险止损触发').wait_for()
+        text = card.inner_text()
+        assert '当前保护价' in text and '10:10:00 盘中触发' in text
+        assert '收盘触发' not in text
+        assert 'T+1限制' in page.locator('#trade-plan-content').inner_text()
+        assert not page.evaluate('document.documentElement.scrollWidth > innerWidth')
+        assert not errors
+    account_db.engine.dispose()

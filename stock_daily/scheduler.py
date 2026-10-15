@@ -117,6 +117,7 @@ def worker(db, settings):
 
     heartbeat = threading.Thread(target=pulse, daemon=True)
     quotes = threading.Thread(target=_portfolio_loop, args=(db, settings, stopped), daemon=True)
+    alerts = threading.Thread(target=_trade_mail_loop, args=(db, settings, stopped), daemon=True)
     # The single-process worker lock is released by the OS even after a crash.
     if db.engine.dialect.name == "sqlite":
         import fcntl
@@ -143,11 +144,13 @@ def worker(db, settings):
     try:
         heartbeat.start()
         quotes.start()
+        alerts.start()
         _worker_loop(db, settings, stopped, activity)
     finally:
         stopped.set()
         heartbeat.join(timeout=5)
         quotes.join(timeout=5)
+        alerts.join(timeout=5)
         try:
             db.save_state(settings.source, "worker", {"at": now().isoformat(), "status": "stopped",
                                                       "phase": "已停止", "pid": os.getpid()})
@@ -155,6 +158,21 @@ def worker(db, settings):
                 guard.execute(text("SELECT pg_advisory_unlock(:key)"), {"key": lock_id})
         finally:
             guard.close()
+
+
+def _trade_mail_loop(db, settings, stopped):
+    """SMTP waits cannot block quote collection or report scheduling."""
+    from .mailer import flush_outbox
+    from .trade_mail import queue_trade_alerts
+
+    while not stopped.is_set():
+        if settings.email_enabled and settings.trade_email_enabled:
+            try:
+                queue_trade_alerts(db, settings)
+                flush_outbox(db, settings, limit=10, slots=("trade",))
+            except Exception:
+                logger.warning("模拟成交提醒未完成；成交已保留，邮件将重试", exc_info=True)
+        stopped.wait(30)
 
 
 def _portfolio_loop(db, settings, stopped):

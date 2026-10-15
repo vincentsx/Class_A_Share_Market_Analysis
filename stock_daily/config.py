@@ -41,6 +41,7 @@ class Settings:
     export_png: bool = False
     html_report_dir: str = "./data/html"
     email_enabled: bool = False
+    trade_email_enabled: bool = True
     smtp_host: str = "smtp.gmail.com"
     smtp_port: int = 465
     smtp_security: str = "ssl"
@@ -89,6 +90,7 @@ class Settings:
             export_png=os.getenv("EXPORT_PNG", "true").lower() == "true",
             html_report_dir=os.getenv("HTML_REPORT_DIR", "./data/html"),
             email_enabled=os.getenv("EMAIL_ENABLED", "false").lower() == "true",
+            trade_email_enabled=os.getenv("TRADE_EMAIL_ENABLED", "true").lower() == "true",
             smtp_host=os.getenv("SMTP_HOST", "smtp.gmail.com").strip(),
             smtp_port=int(os.getenv("SMTP_PORT", "465")),
             smtp_security=os.getenv("SMTP_SECURITY", "ssl").lower(),

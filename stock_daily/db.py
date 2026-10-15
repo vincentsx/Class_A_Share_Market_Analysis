@@ -103,6 +103,14 @@ mail_outbox = Table(
     Column("sent_at", String(40)),
     Column("last_error", Text, nullable=False),
 )
+trade_alerts = Table(
+    "trade_alerts", metadata,
+    Column("id", String(64), primary_key=True),
+    Column("source", String(20), nullable=False),
+    Column("day", String(8), nullable=False),
+    Column("payload", JSON, nullable=False),
+    Column("created_at", String(40), nullable=False),
+)
 snapshots = Table(
     "snapshots", metadata,
     Column("source", String(20), primary_key=True),

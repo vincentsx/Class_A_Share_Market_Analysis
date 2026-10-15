@@ -11,6 +11,7 @@ from .backtest import board, effective_config, fees, position_value, simulate, s
 from .config import SHANGHAI, now
 from .db import bars, paper_accounts, reports, sessions, signals, trading_days
 from .execution import entry_guard, entry_size, industry_of, market_gate
+from .exit_policy import POLICY, advance, context
 from .fills import make_fill
 from .performance import performance
 
@@ -70,7 +71,15 @@ def reconcile(db, settings, stored, cutoff):
             if row:
                 p["mark"] = row["close"]
                 p.pop("quote_time", None)
+                p.pop("quote_error", None)
             p["held_sessions"] += 1
+            if row and p.get("exit_policy"):
+                had_exit = bool(p.get("exit_due"))
+                advance(p, {"price": row["close"], "quote_time": session["acquired_at"]},
+                    context(db, settings.source, p, day), effective_config(simulation_profile(), day))
+                if not had_exit and p.get("exit_due"):
+                    p.update(exit_trigger_day=day, exit_trigger_close=row["close"], exit_trigger_kind="daily")
+                    p.pop("exit_trigger_time", None)
             if not p["exit_due"] and row and row["close"] * row["adj"] < p["invalidation_adj"]:
                 p["exit_due"] = "前一收盘失效，下一有效盘中报价退出"
             if not p["exit_due"] and p["held_sessions"] >= account["parameters"]["holding_days"]:
@@ -195,129 +204,145 @@ def execute_quotes(db, settings, payload, current=None):
             if (error := _quote_error(quotes.get(p["code"]), prior.get(p["code"]), day, current))}
         count_before = len(account["fills"])
         decisions = {}
-        if errors:
-            decisions.update(errors)
-        else:
-            cash = account["summary"]["available_cash"]
-            positions = {p["code"]: p for p in account["positions"]}
-            for code, p in list(positions.items()):
-                q = quotes[code]
-                p.update(mark=q["price"], quote_time=q["quote_time"])
-                if not p["exit_due"] or p["entry_day"] >= day:
-                    continue
-                limit, _ = board(code)
-                price = q["price"] * (1 - config.slippage_bps / 10000)
-                if (limit is None or q["price"] <= prior[code]["close"] * (1 - limit + .001)
-                        or price < q["low"] or p["shares"] > prior[code]["volume"] * config.participation):
-                    decisions[code] = "退出等待：跌停、滑点超出已观察范围或前日量能不足"
-                    continue
-                gross = p["shares"] * price
-                cost = fees(gross, config, sell=True)
-                cash += gross - cost
-                trade = {**p, "exit_day": day, "exit_price": price, "exit_open": q["open"],
-                    "exit_reference_price": q["price"], "exit_time": q["quote_time"],
-                    "exit_confirmed_at": current.isoformat(), "exit_basis": "quote",
-                    "exit_fee": cost, "fees": p["entry_fee"] + cost, "proceeds": gross - cost,
-                    "profit": gross - cost - p["spent"], "exit_reason": p["exit_due"],
-                    "net_return": ((gross - cost) / p["spent"] - 1) * 100}
-                account["trades"].append(trade)
-                account["fills"].insert(0, make_fill(trade, settings.source, "sell",
-                    sequence=len(account["fills"]) + 1, cash_after=cash))
-                del positions[code]
-            candidates = db.rows(select(signals).where(signals.c.source == settings.source, signals.c.day == basis))
-            for signal in sorted(candidates, key=lambda s: (-s["payload"].get("relative20", 0), s["code"], s["strategy"])):
-                code, item = signal["code"], signal["payload"]
-                key = f"{basis}|{code}|{signal['strategy']}"
-                if key in record["attempts"]:
-                    continue
-                try:
-                    stamp = datetime.fromisoformat(item.get("published_at") or report.get("generated_at"))
-                    timely = stamp.tzinfo is not None and basis <= stamp.astimezone(SHANGHAI).strftime("%Y%m%d") <= day
-                    timely = timely and stamp < current.replace(hour=9, minute=30, second=0, microsecond=0)
-                except (ValueError, TypeError):
-                    timely = False
-                if not timely or item.get("reconstructed"):
-                    record["attempts"][key] = "排除事后发布、时间不明或重建信号"
-                    continue
-                if code in positions or len(positions) >= config.max_positions:
-                    decisions[code] = "已有持仓或达到持仓上限，等待后续刷新"
-                    continue
-                stock = universe.get(code, {})
-                limit, lot = board(code)
-                if limit is None or stock.get("is_st") or "ST" in stock.get("name", "").upper() or "退" in stock.get("name", ""):
-                    record["attempts"][key] = "不支持板块或风险标记"
-                    continue
-                q, previous = quotes.get(code), prior.get(code)
-                error = _quote_error(q, previous, day, current)
-                if error:
-                    decisions[code] = error
-                    continue
-                gate = market_gate(report, config) or entry_guard(config, q["open"], previous, item)
-                if gate:
-                    record["attempts"][key] = gate
-                    continue
-                gate = entry_guard(config, q["price"], previous, item)
-                if account["execution_state"].get("entry_paused") or gate:
-                    decisions[code] = gate or "组合回撤暂停新增仓位"
-                    continue
-                price = q["price"] * (1 + config.slippage_bps / 10000)
-                if q["price"] >= previous["close"] * (1 + limit - .001) or price > q["high"]:
-                    decisions[code] = "入场等待：接近涨停或滑点超出已观察范围"
-                    continue
-                equity = cash + sum(p["shares"] * p["mark"] for p in positions.values())
-                industry = industry_of(item)
-                exposure = sum(p["shares"] * p["mark"] for p in positions.values() if p["industry"] == industry)
-                sizing = entry_size(config, cash=cash, equity=equity, price=price, previous=previous,
-                    payload=item, lot=lot, industry_value=exposure)
-                if sizing["reason"]:
-                    decisions[code] = sizing["reason"]
-                    continue
-                shares = sizing["shares"]
-                cost = fees(shares * price, config)
-                spent = shares * price + cost
-                cash -= spent
-                p = {"code": code, "name": item["name"], "strategy": signal["strategy"],
-                    "shares": shares, "entry_day": day, "entry_index": len(account["curve"]),
-                    "entry_price": price, "entry_fee": cost, "spent": spent, "adj": previous["adj"],
-                    "mark": q["price"], "quote_time": q["quote_time"], "entry_open": q["open"],
-                    "entry_reference_price": q["price"], "entry_time": q["quote_time"],
-                    "entry_confirmed_at": current.isoformat(), "entry_basis": "quote",
-                    "published_at": stamp.isoformat(), "label": item.get("label", signal["strategy"]),
-                    "rule_version": item.get("rule_version", ""), "entry_reasons": item.get("reasons", []),
-                    "entry_risk": sizing, "industry": industry, "signal_day": basis,
-                    "invalidation_price": item["invalidation_adj"] / previous["adj"],
-                    "invalidation_adj": item["invalidation_adj"], "exit_due": None, "exit_trigger_day": None,
-                    "exit_trigger_close": None, "exit_delays": [], "held_sessions": 0}
-                positions[code] = p
-                account["fills"].insert(0, make_fill(p, settings.source, "buy", sequence=len(account["fills"]) + 1, cash_after=cash))
-                record["attempts"][key] = "filled"
-            account["positions"] = list(positions.values())
-            account["summary"]["available_cash"] = cash
-            _summarize(account, day)
-            benchmark = quotes.get("000300.SH")
-            origin = db.rows(select(sessions.c.benchmark).where(sessions.c.source == settings.source,
-                sessions.c.day == account["curve"][0]["day"])) if account["curve"] else []
-            if benchmark and origin:
-                previous_benchmark = {"close": prior_session[0]["benchmark"]["close"]}
-                if not _quote_error(benchmark, previous_benchmark, day, current):
-                    account["summary"]["benchmark_return"] = (benchmark["price"] / origin[0]["benchmark"]["close"] - 1) * 100
-                else:
-                    account["summary"]["benchmark_return"] = None
-            account["paper_trading"]["quote_at"] = payload["captured_at"]
+        decisions.update(errors)
+        cash = account["summary"]["available_cash"]
+        positions = {p["code"]: p for p in account["positions"]}
+        for code, p in list(positions.items()):
+            if code in errors:
+                p["quote_error"] = errors[code]
+                continue
+            p.pop("quote_error", None)
+            q = quotes[code]
+            p.update(mark=q["price"], quote_time=q["quote_time"])
+            advance(p, q, context(db, settings.source, p, basis), config)
+            if not p["exit_due"]:
+                continue
+            if p["entry_day"] >= day:
+                decisions[code] = "退出已触发；T+1限制，最早下一交易日卖出"
+                continue
+            limit, _ = board(code)
+            price = q["price"] * (1 - config.slippage_bps / 10000)
+            if (limit is None or q["price"] <= prior[code]["close"] * (1 - limit + .001)
+                    or price < q["low"] or p["shares"] > prior[code]["volume"] * config.participation):
+                decisions[code] = "退出等待：跌停、滑点超出已观察范围或前日量能不足"
+                continue
+            gross = p["shares"] * price
+            cost = fees(gross, config, sell=True)
+            cash += gross - cost
+            trade = {**p, "exit_day": day, "exit_price": price, "exit_open": q["open"],
+                "exit_reference_price": q["price"], "exit_time": q["quote_time"],
+                "exit_confirmed_at": current.isoformat(), "exit_basis": "quote",
+                "exit_fee": cost, "fees": p["entry_fee"] + cost, "proceeds": gross - cost,
+                "profit": gross - cost - p["spent"], "exit_reason": p["exit_due"],
+                "net_return": ((gross - cost) / p["spent"] - 1) * 100}
+            account["trades"].append(trade)
+            account["fills"].insert(0, make_fill(trade, settings.source, "sell",
+                sequence=len(account["fills"]) + 1, cash_after=cash))
+            del positions[code]
+        candidates = db.rows(select(signals).where(signals.c.source == settings.source, signals.c.day == basis))
+        for signal in sorted(candidates if not errors else [], key=lambda s: (-s["payload"].get("relative20", 0), s["code"], s["strategy"])):
+            code, item = signal["code"], signal["payload"]
+            key = f"{basis}|{code}|{signal['strategy']}"
+            if key in record["attempts"]:
+                continue
+            try:
+                stamp = datetime.fromisoformat(item.get("published_at") or report.get("generated_at"))
+                timely = stamp.tzinfo is not None and basis <= stamp.astimezone(SHANGHAI).strftime("%Y%m%d") <= day
+                timely = timely and stamp < current.replace(hour=9, minute=30, second=0, microsecond=0)
+            except (ValueError, TypeError):
+                timely = False
+            if not timely or item.get("reconstructed"):
+                record["attempts"][key] = "排除事后发布、时间不明或重建信号"
+                continue
+            if any(t["code"] == code and t["exit_day"] == day for t in account["trades"]):
+                record["attempts"][key] = "当日已退出，取消重复入场"
+                continue
+            if code in positions or len(positions) >= config.max_positions:
+                decisions[code] = "已有持仓或达到持仓上限，等待后续刷新"
+                continue
+            stock = universe.get(code, {})
+            limit, lot = board(code)
+            if limit is None or stock.get("is_st") or "ST" in stock.get("name", "").upper() or "退" in stock.get("name", ""):
+                record["attempts"][key] = "不支持板块或风险标记"
+                continue
+            q, previous = quotes.get(code), prior.get(code)
+            error = _quote_error(q, previous, day, current)
+            if error:
+                decisions[code] = error
+                continue
+            gate = market_gate(report, config) or entry_guard(config, q["open"], previous, item)
+            if gate:
+                record["attempts"][key] = gate
+                continue
+            gate = entry_guard(config, q["price"], previous, item)
+            if account["execution_state"].get("entry_paused") or gate:
+                decisions[code] = gate or "组合回撤暂停新增仓位"
+                continue
+            price = q["price"] * (1 + config.slippage_bps / 10000)
+            if q["price"] >= previous["close"] * (1 + limit - .001) or price > q["high"]:
+                decisions[code] = "入场等待：接近涨停或滑点超出已观察范围"
+                continue
+            equity = cash + sum(p["shares"] * p["mark"] for p in positions.values())
+            industry = industry_of(item)
+            exposure = sum(p["shares"] * p["mark"] for p in positions.values() if p["industry"] == industry)
+            sizing = entry_size(config, cash=cash, equity=equity, price=price, previous=previous,
+                payload=item, lot=lot, industry_value=exposure)
+            if sizing["reason"]:
+                decisions[code] = sizing["reason"]
+                continue
+            shares = sizing["shares"]
+            cost = fees(shares * price, config)
+            spent = shares * price + cost
+            cash -= spent
+            p = {"code": code, "name": item["name"], "strategy": signal["strategy"],
+                "shares": shares, "entry_day": day, "entry_index": len(account["curve"]),
+                "entry_price": price, "entry_fee": cost, "spent": spent, "adj": previous["adj"],
+                "mark": q["price"], "quote_time": q["quote_time"], "entry_open": q["open"],
+                "entry_reference_price": q["price"], "entry_time": q["quote_time"],
+                "entry_confirmed_at": current.isoformat(), "entry_basis": "quote",
+                "published_at": stamp.isoformat(), "label": item.get("label", signal["strategy"]),
+                "rule_version": item.get("rule_version", ""), "entry_reasons": item.get("reasons", []),
+                "entry_risk": sizing, "industry": industry, "signal_day": basis,
+                "invalidation_price": item["invalidation_adj"] / previous["adj"],
+                "invalidation_adj": item["invalidation_adj"], "exit_due": None, "exit_trigger_day": None,
+                "exit_trigger_close": None, "exit_delays": [], "held_sessions": 0}
+            advance(p, q, {"atr": item.get("atr14"), "basis_day": basis}, config)
+            positions[code] = p
+            account["fills"].insert(0, make_fill(p, settings.source, "buy", sequence=len(account["fills"]) + 1, cash_after=cash))
+            record["attempts"][key] = "filled"
+        account["positions"] = list(positions.values())
+        account["summary"]["available_cash"] = cash
+        _summarize(account, day)
+        benchmark = quotes.get("000300.SH")
+        origin = db.rows(select(sessions.c.benchmark).where(sessions.c.source == settings.source,
+            sessions.c.day == account["curve"][0]["day"])) if account["curve"] else []
+        if benchmark and origin:
+            previous_benchmark = {"close": prior_session[0]["benchmark"]["close"]}
+            if not _quote_error(benchmark, previous_benchmark, day, current):
+                account["summary"]["benchmark_return"] = (benchmark["price"] / origin[0]["benchmark"]["close"] - 1) * 100
+            else:
+                account["summary"]["benchmark_return"] = None
+        account["paper_trading"]["quote_at"] = payload["captured_at"]
         record["processed_at"] = payload["captured_at"]
         decisions = {**{key.split("|")[1]: reason for key, reason in record["attempts"].items()
                         if reason != "filled"}, **decisions}
         account["paper_trading"].update(confirmed_at=current.isoformat(), decisions=decisions,
-            status="waiting" if errors else "success",
-            message="部分持仓报价待核验，本批暂停交易并保留已确认成交。" if errors else
-                    "每10分钟按有效报价确认模拟买卖；已确认成交保留，收盘后仅核验日线退出条件。")
+            status="partial" if errors else "success",
+            message="部分持仓报价待核验：仅暂停异常股票并沿用其最近估值；其余股票可退出，暂停新增买入。" if errors else
+                    "每10分钟按有效报价执行盘中止损、移动盈利保护及先卖后买；遵守T+1。")
         account["status"] = "live"
         account["method"] = ("启用盘中执行后的默认模拟账户，每10分钟按当时有效报价加减滑点处理先卖后买，"
             "保存报价及确认时间；不回填错过的开盘成交。买入后最早下一交易日卖出，"
-            "失效和持有期仍按收盘判断；已确认买卖不会被后续报价或收盘回放撤销。")
+            "盘中风险止损与移动盈利保护优先，连续两日收盘低于MA20退出，持有期10日兜底；"
+            "保护线只上移，峰值仅用启用后观察到的报价；已确认成交不撤销。")
+        account["execution_version"] = "paper-quote-v2"
+        account["exit_policy"] = {**asdict(POLICY), "activated_at": account.get("exit_policy", {}).get("activated_at", current.isoformat())}
         with db.engine.begin() as connection:
             db.upsert(connection, paper_accounts, {"source": settings.source, "day": day, "payload": record})
-        return {"status": "waiting" if errors else "success", "new_fills": len(account["fills"]) - count_before,
+            from .trade_mail import record_alerts
+
+            record_alerts(connection, settings, account["fills"][:len(account["fills"]) - count_before], current)
+        return {"status": "partial" if errors else "success", "new_fills": len(account["fills"]) - count_before,
                 "message": account["paper_trading"]["message"], "decisions": decisions}
 
 
@@ -328,6 +353,7 @@ def current_account(db, settings, report_day, current=None):
     if not rows or rows[0]["day"] < report_day:
         return None
     account = reconcile(db, settings, rows[0]["payload"]["account"], report_day)
+    account["exit_policy_config"] = asdict(POLICY)
     if account["paper_trading"]["daily_through"] >= account["summary"]["through"]:
         account["valuation"] = {"status": "daily", "interval_minutes": settings.portfolio_interval_minutes,
             "message": "收盘日线已核验；盘中确认的成交、股数和资金保留。"}
@@ -341,6 +367,8 @@ def current_account(db, settings, report_day, current=None):
         "positions": deepcopy(account["positions"]), "summary": deepcopy(account["summary"]),
         "message": account["paper_trading"]["message"] + " 日线绩效截至"
                    + account["paper_trading"]["daily_through"] + "。"}
+    if account["paper_trading"].get("status") == "partial":
+        account["valuation"]["status"] = "partial"
     at = account["paper_trading"].get("quote_at")
     freshness_at = current
     if "11:30" < current.strftime("%H:%M") < "13:00":
@@ -361,6 +389,20 @@ def annotate_plan(plan, account):
     plan = deepcopy(plan)
     fills = [f for f in account["fills"] if f["day"] == plan["target_day"]]
     decisions = account["paper_trading"].get("decisions", {})
+    known = {(i["code"], i["entry_day"]) for i in plan.get("exits", [])}
+    actual = [f for f in fills if f["side"] == "sell"] + [p for p in account["positions"] if p.get("exit_due")]
+    for item in actual:
+        key = (item["code"], item["entry_day"])
+        if key in known:
+            continue
+        plan.setdefault("exits", []).append({"code": item["code"], "name": item["name"],
+            "entry_day": item["entry_day"], "shares": item["shares"], "reason": item.get("exit_due") or item.get("reason"),
+            "reference_close": None, "reference_price": None, "reference_proceeds": None,
+            "exit_trigger_day": item.get("exit_trigger_day"), "exit_delays": item.get("exit_delays", []),
+            "conditions": ["盘中保护触发后随有效报价处理，遵守T+1与成交限制"], "origin": "intraday"})
+        known.add(key)
+    exited = {f["code"] for f in fills if f["side"] == "sell"}
+    plan["holds"] = [p for p in plan.get("holds", []) if p["code"] not in exited]
     for item in plan.get("exits", []):
         if item["code"] in decisions:
             item["reason"] += "；本次刷新：" + decisions[item["code"]]
@@ -380,7 +422,7 @@ def annotate_plan(plan, account):
     plan["counts"] = {**plan.get("counts", {}),
         **{status: sum(i["status"] == status for i in plan.get("entries", []))
            for status in ("planned", "conditional", "watch")},
-        "exits": sum(not i.get("execution") for i in plan.get("exits", []))}
+        "exits": sum(not i.get("execution") for i in plan.get("exits", [])), "holds": len(plan.get("holds", []))}
     plan["execution"] = {"confirmed_at": account["paper_trading"]["confirmed_at"],
         "buys": sum(f["side"] == "buy" for f in fills), "sells": sum(f["side"] == "sell" for f in fills)}
     return plan

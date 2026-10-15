@@ -16,7 +16,7 @@ from email.parser import BytesParser
 from email.utils import format_datetime
 from pathlib import Path
 
-from sqlalchemy import and_, select, update
+from sqlalchemy import and_, case, select, update
 from sqlalchemy.exc import IntegrityError
 
 from .config import now
@@ -58,7 +58,7 @@ def valid_address(value):
     return bool(re.fullmatch(r"[^@\s<>(),;:\r\n]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}", value))
 
 
-def configuration_errors(settings):
+def configuration_errors(settings, *, attachments=True):
     missing = []
     if not settings.smtp_host or any(c.isspace() for c in settings.smtp_host):
         missing.append('SMTP_HOST')
@@ -72,15 +72,15 @@ def configuration_errors(settings):
         missing.append('SMTP_SECURITY')
     if not 1 <= settings.smtp_port <= 65535 or not 1 <= settings.smtp_timeout <= 60:
         missing.append('SMTP_PORT / SMTP_TIMEOUT')
-    if not settings.export_html or not settings.export_png:
+    if attachments and (not settings.export_html or not settings.export_png):
         missing.append('EXPORT_HTML / EXPORT_PNG（需同时开启）')
     return missing
 
 
-def require_configuration(settings):
+def require_configuration(settings, *, attachments=True):
     if not settings.email_enabled:
         raise DataError('邮件发送尚未启用；请在本地 .env 设置 EMAIL_ENABLED=true')
-    errors = configuration_errors(settings)
+    errors = configuration_errors(settings, attachments=attachments)
     if errors:
         raise DataError('请补齐或修正本地邮箱配置：' + '、'.join(errors))
 
@@ -214,10 +214,10 @@ def safe_error(error):
     return '邮件发送异常；已保留附件，稍后重试'
 
 
-def flush_outbox(db, settings, limit=1, identifier=None):
+def flush_outbox(db, settings, limit=1, identifier=None, *, slots=None):
     if not settings.email_enabled:
         return {'status':'disabled', 'sent':0, 'failed':0}
-    require_configuration(settings)
+    require_configuration(settings, attachments=False)
     current = now()
     stale = (current - timedelta(minutes=15)).isoformat()
     with db.engine.begin() as connection:
@@ -229,7 +229,12 @@ def flush_outbox(db, settings, limit=1, identifier=None):
                     mail_outbox.c.recipient == settings.mail_to, mail_outbox.c.attempts < MAX_ATTEMPTS,
                     mail_outbox.c.next_attempt_at <= current.isoformat(),
                     mail_outbox.c.status.in_(['pending', 'failed']))
-    query = select(mail_outbox).where(eligible).order_by(mail_outbox.c.created_at).limit(limit)
+    if not settings.trade_email_enabled:
+        eligible = and_(eligible, mail_outbox.c.slot != 'trade')
+    if slots:
+        eligible = and_(eligible, mail_outbox.c.slot.in_(slots))
+    query = select(mail_outbox).where(eligible).order_by(
+        case((mail_outbox.c.slot == 'trade', 0), else_=1), mail_outbox.c.created_at).limit(limit)
     if identifier:
         query = query.where(mail_outbox.c.id == identifier)
     sent = failed = 0
@@ -256,7 +261,7 @@ def flush_outbox(db, settings, limit=1, identifier=None):
             with db.engine.begin() as connection:
                 connection.execute(update(mail_outbox).where(mail_outbox.c.id == record['id'])
                                    .values(status='sent', sent_at=now().isoformat(), last_error='', message=b''))
-            db.finish_run(task, 'success', 'SMTP服务器已接受HTML和PNG报告邮件')
+            db.finish_run(task, 'success', 'SMTP服务器已接受模拟成交提醒' if record['slot'] == 'trade' else 'SMTP服务器已接受HTML和PNG报告邮件')
             sent += 1
     return {'status':'failed' if failed else 'success', 'sent':sent, 'failed':failed}
 

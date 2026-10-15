@@ -36,6 +36,10 @@ def make_fill(position, source, side, *, sequence=None, cash_after=None):
                 else "已发布信号，下一交易日开盘模拟入场"),
             "exit_trigger_day": position.get("exit_trigger_day") if sell else None,
             "exit_trigger_close": position.get("exit_trigger_close") if sell else None,
+            "exit_trigger_kind": position.get("exit_trigger_kind", "daily") if sell else None,
+            "exit_trigger_time": position.get("exit_trigger_time") if sell else None,
+            "exit_trigger_price": position.get("exit_trigger_price") if sell else None,
+            "exit_policy": dict(position["exit_policy"]) if position.get("exit_policy") else None,
             "exit_delays": position.get("exit_delays", []) if sell else [],
             "origin": "model_execution" if sequence is not None else "legacy_derived"}
 
