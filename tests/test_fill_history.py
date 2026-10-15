@@ -123,6 +123,13 @@ def test_phone_history_all_pages_details_filters_csv_and_refresh(browser, popula
     payload = daily_payload(db, settings)
     days = seed_history(db)
     payload["backtest"] = simulate(db, settings, days[-1], Simulation(holding_days=1))
+    evidence = {"version": "entry-intraday-v1", "reason": "连续确认 <img src=x>",
+        "quote_time": "2026-10-09T10:10:00+08:00", "previous_quote_time": "2026-10-09T10:00:00+08:00",
+        "vwap": 10.25, "relative_day": 1.2, "relative_interval": .3, "interval_volume": 123456}
+    if not legacy:
+        payload["backtest"]["fills"][0]["entry_confirmation"] = evidence
+        payload["backtest"]["entry_policy"] = {"version": evidence["version"],
+            "evaluated_at": evidence["quote_time"], "method": "盘中候选每次刷新重新确认"}
     if legacy:
         payload["backtest"].pop("fills")
     path = tmp_path / "history.html"
@@ -134,6 +141,8 @@ def test_phone_history_all_pages_details_filters_csv_and_refresh(browser, popula
         page.goto(path.as_uri())
         page.wait_for_function("() => window.REPORT_READY === true")
         page.locator('[data-view="backtest"]').click()
+        if not legacy:
+            assert "盘中候选每次刷新重新确认" in page.locator("#backtest-output").inner_text()
         page.locator("#show-fill-history").click()
         assert page.locator("#fill-history").is_visible() and page.locator("#fill-history").get_attribute("open") is not None
         assert "117 / 117" in page.locator("#fill-count").inner_text()
@@ -149,6 +158,8 @@ def test_phone_history_all_pages_details_filters_csv_and_refresh(browser, popula
             assert "旧版成交" in detail.inner_text()
         else:
             assert "模拟执行序号" in detail.inner_text()
+            assert "entry-intraday-v1" in detail.inner_text()
+            assert "123456" in detail.inner_text()
         assert not page.evaluate("() => document.documentElement.scrollWidth > innerWidth")
         detail.locator(".close-dialog").click()
         page.locator("#fill-next").click()
@@ -163,6 +174,8 @@ def test_phone_history_all_pages_details_filters_csv_and_refresh(browser, popula
         with csv_path.open(encoding="utf-8-sig", newline="") as f:
             rows = list(csv.DictReader(f))
         assert len(rows) == 117  # export the whole filtered history, not only page two.
+        if not legacy:
+            assert json.loads(rows[0]["盘中买入确认依据"]) == evidence
         assert len({r["成交编号"] for r in rows}) == 117
         assert all(r["名称"] == "'=观察公司" for r in rows)
         assert all(r["卖出对应交易已实现盈亏"] == "" for r in rows if r["方向"] == "买入")

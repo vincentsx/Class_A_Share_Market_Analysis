@@ -65,6 +65,13 @@ paper_accounts = Table(
     Column("day", String(8), primary_key=True),
     Column("payload", JSON, nullable=False),
 )
+paper_quote_batches = Table(
+    "paper_quote_batches", metadata,
+    Column("source", String(20), primary_key=True),
+    Column("day", String(8), primary_key=True),
+    Column("captured_at", String(40), primary_key=True),
+    Column("payload", JSON, nullable=False),
+)
 news_items = Table(
     "news_items", metadata,
     Column("provider", String(20), primary_key=True),

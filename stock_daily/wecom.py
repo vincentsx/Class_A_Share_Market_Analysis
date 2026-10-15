@@ -116,6 +116,11 @@ def trade_content(fill):
         f"成交原因：{clean(fill['reason'])}", f"策略：{clean(fill.get('label') or fill['strategy'])}"]
     if fill["side"] == "sell":
         lines.append(f"该轮扣费已实现盈亏：{fill['realized_profit']:+.2f} 元")
+    if fill.get("entry_confirmation"):
+        e = fill["entry_confirmation"]
+        lines += [f"盘中买入确认：{e['version']} · {clean(e['reason'])}",
+            f"当日成交均价：{e['vwap']:.4f} 元 · 区间新增成交 {e['interval_volume']:.0f} 股",
+            f"区间相对沪深300：{e['relative_interval']:+.2f} 个百分点"]
     if fill.get("exit_policy"):
         p = fill["exit_policy"]
         lines.append(f"退出保护：{p['version']} · 保护价 {p['stop']:.4f} 元")

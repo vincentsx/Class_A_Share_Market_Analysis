@@ -45,6 +45,13 @@ def compose_trade(settings, event):
         ("成交编号", fill["id"])]
     if fill["side"] == "sell":
         facts.append(("该轮交易已实现盈亏（扣双边费用）", f"{fill['realized_profit']:+.2f} 元"))
+    entry = fill.get("entry_confirmation")
+    if entry:
+        facts += [("盘中买入规则", entry["version"]), ("买入确认依据", entry["reason"]),
+                  ("观察区间", f"{entry['previous_quote_time']} ～ {entry['quote_time']}"),
+                  ("当日成交均价", f"{entry['vwap']:.4f} 元"),
+                  ("区间新增成交量", f"{entry['interval_volume']:.0f} 股"),
+                  ("区间相对沪深300", f"{entry['relative_interval']:+.2f} 个百分点")]
     protection = fill.get("exit_policy")
     if protection:
         facts += [("退出规则", protection["version"]), ("当前保护价", f"{protection['stop']:.4f} 元"),

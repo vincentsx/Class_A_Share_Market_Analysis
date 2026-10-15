@@ -8,6 +8,7 @@ from sqlalchemy import select
 from .backtest import board, effective_config, fees, simulate, simulation_profile
 from .config import SHANGHAI, now
 from .db import bars, sessions, signals, trading_days
+from .entry_policy import METHOD as ENTRY_METHOD
 from .execution import entry_guard, entry_size, industry_of, market_gate
 
 
@@ -41,6 +42,7 @@ def build_trade_plan(db, settings, report, *, connection=None, frozen=False, con
     view = TransactionView(connection) if connection is not None else db
     day, source = report["day"], settings.source
     config = config or simulation_profile()
+    live_default = config == simulation_profile()
     simulation = simulate(view, settings, day, config)
     target = next_session(view, source, day)
     created = now().isoformat() if frozen else None
@@ -55,6 +57,9 @@ def build_trade_plan(db, settings, report, *, connection=None, frozen=False, con
                         "跳空、停牌、涨跌停、复权变化、资金和量能可能改变股数或导致不成交。"
                         "盘中估值不改写本计划；修改模拟页参数不改写默认参数的日线计划。"}
     result["policy"] = {"effective_from": config.policy_start_day or None}
+    if live_default:
+        result["method"] = ENTRY_METHOD + ("盘后价格与股数仅为参考，实际数量按盘中报价、费用、资金和量能重算。"
+            "本计划冻结保存，盘中状态仅覆盖当前账户视图；历史报告不改写。")
     config = effective_config(config, target or day)
     if frozen and deadline and datetime.fromisoformat(created) >= deadline:
         result["status"] = "late"
@@ -148,6 +153,10 @@ def build_trade_plan(db, settings, report, *, connection=None, frozen=False, con
                     conditions=["仅下一交易日开盘尝试，实际股数按开盘价、费用、资金与前一日量能重新计算",
                                 "开盘接近涨停、停牌、复权变化、滑点价超出日内范围等情况不模拟成交",
                                 "买入后按收盘失效位置与持有期核验退出，不是盘中触价立即止损"])
+        if live_default:
+            item["conditions"] = ["下一交易日按每次有效报价重评；积累连续观察后才尝试买入，先卖后买",
+                ENTRY_METHOD, "数量受风险预算、资金、行业仓位与前日/观察区间量能限制；遵守T+1",
+                "已确认持仓按盘中风险止损、移动盈利保护、日线趋势与持有期退出规则处理"]
         if config.max_entry_gap:
             item["max_open_inclusive"] = row["close"] * (1 + config.max_entry_gap)
             item["conditions"].append(f"开盘涨幅超过{config.max_entry_gap * 100:g}%时取消入场")

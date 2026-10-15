@@ -9,7 +9,10 @@ from sqlalchemy import select
 
 from .backtest import board, effective_config, fees, position_value, simulate, simulation_profile
 from .config import SHANGHAI, now
-from .db import bars, paper_accounts, reports, sessions, signals, trading_days
+from .db import bars, paper_accounts, paper_quote_batches, reports, sessions, signals, trading_days
+from .entry_policy import METHOD as ENTRY_METHOD
+from .entry_policy import VERSION as ENTRY_VERSION
+from .entry_policy import confirmation, rank_key
 from .execution import entry_guard, entry_size, industry_of, market_gate
 from .exit_policy import POLICY, advance, context
 from .fills import make_fill
@@ -200,6 +203,18 @@ def execute_quotes(db, settings, payload, current=None):
         prior_session = db.rows(select(sessions).where(sessions.c.source == settings.source, sessions.c.day == basis))
         universe = prior_session[0]["universe"] if prior_session else {}
         quotes = payload["quotes"]
+        valid_quotes = {code: q for code, q in quotes.items()
+            if not _quote_error(q, {"close": prior_session[0]["benchmark"]["close"]}
+                if code == "000300.SH" and prior_session else prior.get(code), day, current)}
+        # Invalid amount blocks confirmation, but must not block an otherwise valid exit
+        # or put NaN into JSON (which PostgreSQL and the public feed reject).
+        valid_quotes = {code: {**q, "amount": q.get("amount") if isinstance(q.get("amount"), (int, float))
+            and math.isfinite(q["amount"]) and q["amount"] > 0 else None} for code, q in valid_quotes.items()}
+        previous_batches = db.rows(select(paper_quote_batches).where(
+            paper_quote_batches.c.source == settings.source, paper_quote_batches.c.day == day,
+            paper_quote_batches.c.captured_at < payload["captured_at"])
+            .order_by(paper_quote_batches.c.captured_at.desc()).limit(1))
+        previous_quotes = previous_batches[0]["payload"]["quotes"] if previous_batches else {}
         errors = {p["code"]: error for p in account["positions"]
             if (error := _quote_error(quotes.get(p["code"]), prior.get(p["code"]), day, current))}
         count_before = len(account["fills"])
@@ -240,7 +255,42 @@ def execute_quotes(db, settings, payload, current=None):
                 sequence=len(account["fills"]) + 1, cash_after=cash))
             del positions[code]
         candidates = db.rows(select(signals).where(signals.c.source == settings.source, signals.c.day == basis))
-        for signal in sorted(candidates if not errors else [], key=lambda s: (-s["payload"].get("relative20", 0), s["code"], s["strategy"])):
+        evaluations = {}
+        for signal in candidates:
+            code, item = signal["code"], signal["payload"]
+            key = f"{basis}|{code}|{signal['strategy']}"
+            base = {"code": code, "strategy": signal["strategy"], "evaluated_at": current.isoformat(),
+                    "version": ENTRY_VERSION}
+            attempt = record["attempts"].get(key)
+            if attempt:
+                evaluations[key] = {**base, "status": "filled" if attempt == "filled" else "cancelled",
+                    "reason": "已确认模拟买入" if attempt == "filled" else attempt}
+                continue
+            stop, previous = item.get("invalidation_adj"), prior.get(code)
+            if (code not in valid_quotes or not previous or not isinstance(stop, (int, float))
+                    or not math.isfinite(stop) or stop <= 0):
+                evaluation = {"status": "waiting", "reason": "报价或信号失效位置待核验"}
+            else:
+                evaluation = confirmation(valid_quotes[code], previous_quotes.get(code),
+                    valid_quotes.get("000300.SH"), previous_quotes.get("000300.SH"),
+                    stop=stop / previous["adj"], interval=settings.portfolio_interval_minutes)
+            evaluations[key] = {**base, **evaluation}
+            if evaluation["status"] == "cancelled":
+                record["attempts"][key] = evaluation["reason"]
+            elif errors:
+                evaluations[key].update(status="waiting", reason="持仓报价待核验，暂停新增买入")
+        equity = cash + sum(p["shares"] * p["mark"] for p in positions.values())
+        peak = max(account["execution_state"].get("quote_peak_equity", 0),
+            account["summary"]["initial_capital"], equity,
+            max((p["equity"] for p in account["curve"]), default=0))
+        if not errors:
+            account["execution_state"]["quote_peak_equity"] = peak
+            if config.drawdown_pause and equity / peak - 1 <= -config.drawdown_pause:
+                account["execution_state"]["entry_paused"] = True
+        ordered = sorted(candidates, key=lambda s: rank_key(s, evaluations))
+        for rank, signal in enumerate(ordered, 1):
+            evaluations[f"{basis}|{signal['code']}|{signal['strategy']}"]["decision_rank"] = rank
+        for signal in ordered if not errors else []:
             code, item = signal["code"], signal["payload"]
             key = f"{basis}|{code}|{signal['strategy']}"
             if key in record["attempts"]:
@@ -257,7 +307,7 @@ def execute_quotes(db, settings, payload, current=None):
             if any(t["code"] == code and t["exit_day"] == day for t in account["trades"]):
                 record["attempts"][key] = "当日已退出，取消重复入场"
                 continue
-            if code in positions or len(positions) >= config.max_positions:
+            if code in positions:
                 decisions[code] = "已有持仓或达到持仓上限，等待后续刷新"
                 continue
             stock = universe.get(code, {})
@@ -276,7 +326,14 @@ def execute_quotes(db, settings, payload, current=None):
                 continue
             gate = entry_guard(config, q["price"], previous, item)
             if account["execution_state"].get("entry_paused") or gate:
-                decisions[code] = gate or "组合回撤暂停新增仓位"
+                decisions[code] = (gate.replace("开盘", "当前报价").replace("取消本次入场", "等待后续刷新")
+                                   if gate else "组合回撤暂停新增仓位")
+                continue
+            if evaluations[key]["status"] != "eligible":
+                decisions[code] = evaluations[key]["reason"]
+                continue
+            if len(positions) >= config.max_positions:
+                decisions[code] = "达到持仓上限，等待后续刷新"
                 continue
             price = q["price"] * (1 + config.slippage_bps / 10000)
             if q["price"] >= previous["close"] * (1 + limit - .001) or price > q["high"]:
@@ -286,7 +343,9 @@ def execute_quotes(db, settings, payload, current=None):
             industry = industry_of(item)
             exposure = sum(p["shares"] * p["mark"] for p in positions.values() if p["industry"] == industry)
             sizing = entry_size(config, cash=cash, equity=equity, price=price, previous=previous,
-                payload=item, lot=lot, industry_value=exposure)
+                payload=item, lot=lot, industry_value=exposure,
+                volume_capacity=evaluations[key]["interval_volume"] * config.participation)
+            sizing["interval_volume_capacity"] = evaluations[key]["interval_volume"] * config.participation
             if sizing["reason"]:
                 decisions[code] = sizing["reason"]
                 continue
@@ -303,6 +362,7 @@ def execute_quotes(db, settings, payload, current=None):
                 "published_at": stamp.isoformat(), "label": item.get("label", signal["strategy"]),
                 "rule_version": item.get("rule_version", ""), "entry_reasons": item.get("reasons", []),
                 "entry_risk": sizing, "industry": industry, "signal_day": basis,
+                "entry_confirmation": deepcopy(evaluations[key]),
                 "invalidation_price": item["invalidation_adj"] / previous["adj"],
                 "invalidation_adj": item["invalidation_adj"], "exit_due": None, "exit_trigger_day": None,
                 "exit_trigger_close": None, "exit_delays": [], "held_sessions": 0}
@@ -310,6 +370,18 @@ def execute_quotes(db, settings, payload, current=None):
             positions[code] = p
             account["fills"].insert(0, make_fill(p, settings.source, "buy", sequence=len(account["fills"]) + 1, cash_after=cash))
             record["attempts"][key] = "filled"
+        for key, evaluation in evaluations.items():
+            code = evaluation["code"]
+            attempt = record["attempts"].get(key)
+            if attempt:
+                evaluation.update(status="filled" if attempt == "filled" else "cancelled",
+                    reason="已确认模拟买入" if attempt == "filled" else attempt)
+            elif code in decisions:
+                evaluation.update(status="waiting", reason=decisions[code])
+        account["entry_policy"] = {"version": ENTRY_VERSION, "method": ENTRY_METHOD,
+            "activated_at": account.get("entry_policy", {}).get("activated_at", current.isoformat()),
+            "evaluated_at": current.isoformat(), "basis_day": basis,
+            "candidates": [evaluations[f"{basis}|{s['code']}|{s['strategy']}"] for s in ordered]}
         account["positions"] = list(positions.values())
         account["summary"]["available_cash"] = cash
         _summarize(account, day)
@@ -329,15 +401,17 @@ def execute_quotes(db, settings, payload, current=None):
         account["paper_trading"].update(confirmed_at=current.isoformat(), decisions=decisions,
             status="partial" if errors else "success",
             message="部分持仓报价待核验：仅暂停异常股票并沿用其最近估值；其余股票可退出，暂停新增买入。" if errors else
-                    "每10分钟按有效报价执行盘中止损、移动盈利保护及先卖后买；遵守T+1。")
+                    "每10分钟重评盘中买入信号、排序与风险预算，执行盘中退出保护及先卖后买；遵守T+1。")
         account["status"] = "live"
         account["method"] = ("启用盘中执行后的默认模拟账户，每10分钟按当时有效报价加减滑点处理先卖后买，"
             "保存报价及确认时间；不回填错过的开盘成交。买入后最早下一交易日卖出，"
             "盘中风险止损与移动盈利保护优先，连续两日收盘低于MA20退出，持有期10日兜底；"
-            "保护线只上移，峰值仅用启用后观察到的报价；已确认成交不撤销。")
-        account["execution_version"] = "paper-quote-v2"
+            "保护线只上移，峰值仅用启用后观察到的报价；已确认成交不撤销。" + ENTRY_METHOD)
+        account["execution_version"] = "paper-quote-v3"
         account["exit_policy"] = {**asdict(POLICY), "activated_at": account.get("exit_policy", {}).get("activated_at", current.isoformat())}
         with db.engine.begin() as connection:
+            db.upsert(connection, paper_quote_batches, {"source": settings.source, "day": day,
+                "captured_at": payload["captured_at"], "payload": {"quotes": valid_quotes, "version": ENTRY_VERSION}})
             db.upsert(connection, paper_accounts, {"source": settings.source, "day": day, "payload": record})
             from .trade_mail import record_alerts
 
@@ -354,6 +428,7 @@ def current_account(db, settings, report_day, current=None):
         return None
     account = reconcile(db, settings, rows[0]["payload"]["account"], report_day)
     account["exit_policy_config"] = asdict(POLICY)
+    account["entry_policy_config"] = {"version": ENTRY_VERSION, "method": ENTRY_METHOD}
     if account["paper_trading"]["daily_through"] >= account["summary"]["through"]:
         account["valuation"] = {"status": "daily", "interval_minutes": settings.portfolio_interval_minutes,
             "message": "收盘日线已核验；盘中确认的成交、股数和资金保留。"}
@@ -411,7 +486,13 @@ def annotate_plan(plan, account):
         if fill:
             item["execution"] = fill
     for item in plan.get("entries", []):
-        if item["code"] in decisions:
+        evaluation = next((e for e in account.get("entry_policy", {}).get("candidates", [])
+            if e["code"] == item["code"] and e["strategy"] == item["strategy"]), None)
+        if evaluation:
+            item.update(intraday=evaluation, rank=evaluation["decision_rank"],
+                reason=evaluation["reason"], status="planned" if evaluation["status"] == "eligible" else "watch")
+            item["conditions"] = [ENTRY_METHOD, "股数、费用、行业仓位与风险预算按本次报价重新计算；遵守T+1"]
+        if not evaluation and item["code"] in decisions:
             item["reason"] = "本次刷新：" + decisions[item["code"]]
             if any(word in decisions[item["code"]] for word in ("取消", "排除", "不支持")):
                 item["status"] = "watch"
@@ -419,6 +500,10 @@ def annotate_plan(plan, account):
                      and f["strategy"] == item["strategy"] and f["signal_day"] == item["signal_day"]), None)
         if fill:
             item.update(status="filled", execution=fill, reason="已按有效盘中报价确认模拟买入")
+    if account.get("entry_policy"):
+        plan["entries"] = sorted(plan.get("entries", []), key=lambda i: i["rank"])
+        plan["entry_policy"] = account["entry_policy"]
+        plan["method"] = ENTRY_METHOD + "盘后参考股数与价格保留供核对，实际成交以盘中记录为准。"
     plan["counts"] = {**plan.get("counts", {}),
         **{status: sum(i["status"] == status for i in plan.get("entries", []))
            for status in ("planned", "conditional", "watch")},

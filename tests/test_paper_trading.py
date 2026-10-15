@@ -7,7 +7,16 @@ from sqlalchemy import delete, select
 
 from stock_daily.backtest import simulate
 from stock_daily.config import SHANGHAI
-from stock_daily.db import Database, bars, paper_accounts, reports, sessions, signals, trading_days
+from stock_daily.db import (
+    Database,
+    bars,
+    paper_accounts,
+    paper_quote_batches,
+    reports,
+    sessions,
+    signals,
+    trading_days,
+)
 from stock_daily.paper_trading import annotate_plan, current_account, execute_quotes
 from stock_daily.trade_plan import build_trade_plan
 from stock_daily.web import create_app
@@ -15,7 +24,7 @@ from stock_daily.web import create_app
 CURRENT = datetime(2026, 10, 15, 10, 0, tzinfo=SHANGHAI)
 
 
-def setup(db, source="demo"):
+def setup(db, source="demo", observed=True):
     codes = ["600000.SH", "600001.SH"]
     with db.engine.begin() as c:
         for day in ("20261013", "20261014", "20261015", "20261016"):
@@ -36,14 +45,26 @@ def setup(db, source="demo"):
             "candidates": [], "all_candidates": [], "quality": {"suspended": []}, "changes": {}, "evidence": {},
             "market": {"above_ma20_ratio": 80, "benchmark_return20": 5}}
         db.upsert(c, reports, {"source": source, "day": "20261014", "payload": report})
+        if observed:
+            # Most account/exit/notification tests begin after one genuine prior observation.
+            stamp = CURRENT - timedelta(minutes=10)
+            before = quotes(stamp)
+            for quote in before["quotes"].values():
+                quote.update(volume=900000, amount=900000 * (100.5 if quote["code"] == "000300.SH" else 10.25))
+            db.upsert(c, paper_quote_batches, {"source": source, "day": "20261015",
+                "captured_at": stamp.isoformat(), "payload": {"quotes": before["quotes"]}})
     return report
 
 
 def quotes(current=CURRENT):
     return {"day": current.strftime("%Y%m%d"), "captured_at": current.isoformat(), "quotes": {
         code: {"code": code, "name": code, "previous": 10.2, "open": 10.2,
-            "price": 10.3, "high": 10.8, "low": 9.8, "volume": 1e6, "quote_time": current.isoformat()}
-        for code in ("600000.SH", "600001.SH", "000300.SH")}}
+            "price": 10.3, "high": 10.8, "low": 9.8, "volume": 1e6, "amount": 10250000,
+            "quote_time": current.isoformat()}
+        for code in ("600000.SH", "600001.SH")}
+        | {"000300.SH": {"code": "000300.SH", "name": "沪深300", "previous": 100, "open": 100,
+            "price": 101, "high": 102, "low": 99, "volume": 1e6, "amount": 100500000,
+            "quote_time": current.isoformat()}}}
 
 
 def close_day(db, day="20261015", price=9, source="demo"):

@@ -15,7 +15,7 @@ def market_gate(report, config):
     return None
 
 
-def entry_size(config, *, cash, equity, price, previous, payload, lot, industry_value=0):
+def entry_size(config, *, cash, equity, price, previous, payload, lot, industry_value=0, volume_capacity=None):
     """Size from known prices, frozen invalidation/ATR, and prior-day volume.
 
     The risk estimate includes estimated round-trip fees. Gaps and delayed exits
@@ -41,6 +41,8 @@ def entry_size(config, *, cash, equity, price, previous, payload, lot, industry_
                 return {"reason": "缺少冻结ATR，无法核验风险仓位", "shares": 0}
             distance = max(distance, atr * config.atr_risk_floor)
     capacity = min(max(0, budget) / price, previous["volume"] * config.participation)
+    if volume_capacity is not None:
+        capacity = min(capacity, max(0, volume_capacity))
     if risk_budget is not None:
         capacity = min(capacity, risk_budget / distance)
     shares = math.floor(capacity / lot) * lot

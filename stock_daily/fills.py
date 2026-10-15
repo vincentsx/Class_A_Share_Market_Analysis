@@ -30,8 +30,10 @@ def make_fill(position, source, side, *, sequence=None, cash_after=None):
             "entry_day": position["entry_day"], "entry_price": position.get("entry_price"),
             "entry_fee": position.get("entry_fee"), "invalidation_price": position.get("invalidation_price"),
             "entry_reasons": position.get("entry_reasons", []), "entry_risk": position.get("entry_risk"),
+            "entry_confirmation": position.get("entry_confirmation"),
             "realized_profit": position.get("profit") if sell else None,
             "reason": position.get("exit_reason") if sell else (
+                "盘中连续报价、量额与相对强度确认通过，按有效报价模拟入场" if position.get("entry_confirmation") else
                 "已发布信号，按有效盘中报价模拟入场" if position.get("entry_basis") == "quote"
                 else "已发布信号，下一交易日开盘模拟入场"),
             "exit_trigger_day": position.get("exit_trigger_day") if sell else None,
