@@ -17,7 +17,7 @@ from .entry_policy import confirmation, rank_key
 from .execution import entry_guard, entry_size, industry_of, market_gate
 from .exit_policy import POLICY, advance, context
 from .fills import make_fill
-from .performance import performance
+from .performance import account_pnl, performance
 
 
 def _rows(db, source, day=None):
@@ -38,6 +38,7 @@ def _summarize(account, day):
         closed_trades=len(account["trades"]), open_positions=len(positions), through=day,
         fees=sum(f["fee"] for f in account["fills"]))
     summary["return"] = (equity / summary["initial_capital"] - 1) * 100
+    summary.update(account_pnl(summary, account["curve"]))
     account["as_of"] = day
 
 
@@ -124,7 +125,11 @@ def recorded_account(db, settings, as_of=None):
     if not latest:
         return None
     saved = _rows(db, settings.source, latest[0]["day"])
-    return reconcile(db, settings, saved[0]["payload"]["account"], latest[0]["day"]) if saved else None
+    if not saved:
+        return None
+    account = reconcile(db, settings, saved[0]["payload"]["account"], latest[0]["day"])
+    account["summary"].update(account_pnl(account["summary"], account["curve"]))
+    return account
 
 
 def _quote_error(quote, previous, day, current):
@@ -448,6 +453,7 @@ def current_account(db, settings, report_day, current=None):
     if not rows or rows[0]["day"] < report_day:
         return None
     account = reconcile(db, settings, rows[0]["payload"]["account"], report_day)
+    account["summary"].update(account_pnl(account["summary"], account["curve"]))
     account["market_analysis"] = latest_analysis(db, settings, current)
     account["decision_policy"] = configured_policy(settings)
     account["exit_policy_config"] = asdict(POLICY)

@@ -15,7 +15,7 @@ from .config import SHANGHAI
 from .db import bars, reports, sessions, signals, trading_days
 from .execution import entry_guard, entry_size, industry_of, market_gate
 from .fills import make_fill
-from .performance import performance
+from .performance import account_pnl, performance
 
 DEFAULT_PROFILE = "guarded"
 DEFAULT_POLICY_START_DAY = "20261015"
@@ -142,6 +142,7 @@ def simulate(db, settings, as_of=None, config=None, *, _research=False):
         return {"status": "empty", "parameters": asdict(config), "curve": [], "trades": [], "fills": [], "skipped": {},
                 "method": "尚无行情，无法模拟", "summary": {"initial_capital": config.capital,
                 "market_value": None, "available_cash": None, "equity": None, "profit": None,
+                **account_pnl({}, []),
                 "through": None}, "periods": [], "positions": []}
     latest = session_rows[-1]["day"]
     if config.start_day and config.start_day > latest:
@@ -357,7 +358,7 @@ def simulate(db, settings, as_of=None, config=None, *, _research=False):
     valued_positions = [{**p, **position_value(p, p["mark"])} for p in positions.values()]
     metrics = performance(curve, trades, valued_positions, config.capital)
     pause_limit = effective_config(config, curve[-1]["day"]).drawdown_pause if curve else 0
-    return {"status": "incomplete" if stop else "success", "as_of": latest, "stop": stop,
+    result = {"status": "incomplete" if stop else "success", "as_of": latest, "stop": stop,
             "execution_version": "cash-v2", "execution_state": {"entry_paused": paused or bool(
                 pause_limit and curve and curve[-1]["equity"] / peak - 1 <= -pause_limit)},
             "policy": {"effective_from": config.policy_start_day or None,
@@ -389,3 +390,5 @@ def simulate(db, settings, as_of=None, config=None, *, _research=False):
                       "缺失持仓行情或分红送转细节时停止净值。日线不能证明真实成交；费用是可修改假设。"
                       "历史名称/行业/风险状态与数据修订不完全具备时点性，仍有历史偏差；事后生成的信号排除。"
                       "前后段对比不是预先留出的样本外检验，不自动调参、不证明交易优势。"}
+    result["summary"].update(account_pnl(result["summary"], curve))
+    return result

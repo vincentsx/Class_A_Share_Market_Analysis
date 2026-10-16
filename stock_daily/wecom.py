@@ -145,9 +145,11 @@ def queue_notifications(db, settings):
     queued = 0
     for event in sorted(events, key=lambda e: (e["created_at"], e["payload"]["sequence"])):
         identifier = digest(event["id"] + "|" + target_hash)
-        stamp = now().isoformat()
+        current = now()
+        stamp = current.isoformat()
         content = trade_content(event["payload"])
-        if event["created_at"] < bound["bound_at"]:
+        if (event["created_at"] < bound["bound_at"]
+                or datetime.fromisoformat(event["created_at"]) < current - timedelta(minutes=2)):
             content = "**补发成交提醒：以原成交时间为准，未重新交易。**\n" + content
         try:
             with db.engine.begin() as connection:
@@ -300,9 +302,20 @@ def run(db, settings, stopped):
 
     prepare_pairing(db, settings)
     delay = 1
+    replaced = False
     transport = logging.getLogger("stock_daily.wecom.transport")
     transport.setLevel(logging.WARNING)  # Never log authentication frames even under a debug root logger.
     while not stopped.is_set():
+        # Persist pending notifications even while disconnected or displaced.
+        # A displaced connection stays paused until an operator restarts it;
+        # never fight another client by repeatedly taking the connection back.
+        try:
+            queue_notifications(db, settings)
+        except Exception:
+            logger.warning("企业微信提醒入队失败，将重试", exc_info=True)
+        if replaced:
+            stopped.wait(5)
+            continue
         try:
             with connect(settings.wecom_ws_url, open_timeout=10, close_timeout=2,
                          ping_interval=None, max_size=1_048_576, logger=transport) as websocket:
@@ -330,7 +343,9 @@ def run(db, settings, stopped):
         except ConnectionReplaced:
             db.save_state(settings.source, "wecom_connection", {"status": "conflict", "at": now().isoformat(),
                 "message": "机器人被另一个长连接接管；已保留待发提醒，避免互相抢连，需关闭重复客户端后重启worker"})
-            return
+            logger.warning("企业微信长连接被接管，暂停连接；继续保留新成交提醒，等待恢复")
+            replaced = True
+            continue
         except Exception as error:
             message = str(error) if isinstance(error, ProtocolError) else "企业微信连接暂不可用，自动重连；成交和邮件不受影响"
             db.save_state(settings.source, "wecom_connection", {"status": "reconnecting", "at": now().isoformat(), "message": message})

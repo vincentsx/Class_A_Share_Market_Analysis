@@ -420,12 +420,14 @@ function renderBacktest(data) {
   const equity = s.equity ?? last?.equity ?? null;
   const marketValue = s.market_value ?? (equity !== null && cash !== null ? equity - cash : null);
   const profit = s.profit ?? (equity !== null && initial !== null ? equity - initial : null);
+  const dailyBasis = s.daily_profit_basis_day ? `${dateLabel(s.daily_profit_basis_day)}收盘净值` : "初始资金";
   const accountCards = `<div id="simulation-account" class="tracking-grid funds-grid">${[
     ["initial_capital","初始资金",initial,"本次模拟的起始资金"],
     ["market_value","当前持仓市值",marketValue,`按最近有效估值计算 · ${s.open_positions || 0}只持仓`],
     ["available_cash","可用资金",cash,"扣除已发生费用后的现金余额"],
-    ["profit","盈亏金额",profit,"总资产减初始资金，已计入发生的费用"],
-  ].map(([field,label,value,note]) => `<div class="tracking-card" data-account-field="${field}"><h3>${label}</h3><div class="metric-value ${field === "profit" ? color(value) : ""}">${field === "profit" && value > 0 ? "+" : ""}${num(value)}<small> 元</small></div><p>${esc(note)}</p></div>`).join("")}</div><p class="muted">总资产 ${num(equity)} 元 = 持仓市值 + 可用资金 · 账户估值截至 ${dateLabel(s.through || last?.day)}</p>`;
+    ["daily_profit","当日盈亏",s.daily_profit,`${dateLabel(s.daily_profit_day || s.through)} · ${pct(s.daily_return)} · 较${dailyBasis}`],
+    ["profit","累计盈亏",profit,`${pct(s.cumulative_return ?? s.return)} · 总资产减初始资金，已计入发生的费用`],
+  ].map(([field,label,value,note]) => `<div class="tracking-card" data-account-field="${field}"><h3>${label}</h3><div class="metric-value ${["profit","daily_profit"].includes(field) ? color(value) : ""}">${["profit","daily_profit"].includes(field) && value > 0 ? "+" : ""}${num(value)}<small> 元</small></div><p>${esc(note)}</p></div>`).join("")}</div><p class="muted">总资产 ${num(equity)} 元 = 持仓市值 + 可用资金 · 账户估值截至 ${dateLabel(s.through || last?.day)}。当日盈亏为账户净值变化，包含持仓涨跌及当日成交费用，不等同于卖出交易的整轮盈亏。</p>`;
   const parameterText = `资金 ${num(p.capital,0)}元 · 单只权重 ${num(p.weight * 100,0)}% · 最多${p.max_positions}只 · 持有${p.holding_days}交易日 · 每边佣金${num(p.commission_bps,1)}基点（最低${num(p.min_commission)}元） · 卖出税费${num(p.sell_tax_bps,1)}基点 · 每边过户费${num(p.transfer_bps,1)}基点 · 每边滑点${num(p.slippage_bps,1)}基点 · 前一日量能参与上限${num(p.participation * 100,1)}%`;
   const riskText = `单笔风险预算 ${p.risk_fraction ? num(p.risk_fraction * 100,2) + "%（估算）" : "关闭"} · ATR风险距离下限 ${num(p.atr_risk_floor ?? 0,1)}倍 · 开盘追高上限 ${p.max_entry_gap ? pct(p.max_entry_gap * 100) : "关闭"} · 失效入场保护 ${p.require_valid_entry ? "开启" : "关闭"} · 行业上限 ${p.max_industry_weight ? pct(p.max_industry_weight * 100) : "关闭"} · 市场过滤 ${p.market_filter ? "开启" : "关闭"} · 回撤暂停 ${p.drawdown_pause ? pct(p.drawdown_pause * 100) : "关闭"}`;
   const metrics = data.performance;

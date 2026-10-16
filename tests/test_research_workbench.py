@@ -518,8 +518,8 @@ def test_offline_browser_all_candidates_and_new_views(populated, tmp_path):
             assert page.locator("#scorecard-table").is_visible()
             page.locator('[data-view="backtest"]').click()
             page.wait_for_function("() => document.getElementById('backtest-output').textContent.length > 0")
-            assert page.locator("#simulation-account .tracking-card").count() == 4
-            for label in ("初始资金", "当前持仓市值", "可用资金", "盈亏金额"):
+            assert page.locator("#simulation-account .tracking-card").count() == 5
+            for label in ("初始资金", "当前持仓市值", "可用资金", "当日盈亏", "累计盈亏"):
                 assert label in page.locator("#simulation-account").inner_text()
             assert page.locator("#backtest-form button").is_disabled()
             assert not page.evaluate("document.documentElement.scrollWidth > innerWidth")

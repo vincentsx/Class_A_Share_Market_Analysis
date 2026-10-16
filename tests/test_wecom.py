@@ -19,6 +19,7 @@ from stock_daily.wecom import (
     digest,
     prepare_pairing,
     queue_notifications,
+    run,
     status_view,
     target,
 )
@@ -232,3 +233,82 @@ def test_new_pairing_cli_code_survives_worker_restart_with_old_environment(wecom
     message['body']['text']['content']='订阅交易提醒\n'+code
     assert bind_callback(db,s,message)['chat_id']=='owner'
     assert create_pairing(db,s)['status']=='bound'
+
+
+def test_displaced_connection_still_queues_new_fills_without_reconnecting(wecom_settings, db, monkeypatch):
+    s = replace(wecom_settings, wecom_chat_id='owner')
+    monkeypatch.setattr('stock_daily.wecom.now', lambda: CURRENT)
+    setup(db)
+    connections, sent, account_before = [], [], []
+
+    class Stopped:
+        done = False
+        waits = 0
+
+        def is_set(self):
+            return self.done
+
+        def wait(self, seconds):
+            assert seconds == 5
+            assert state(db, s, 'wecom_connection')['status'] == 'conflict'
+            self.waits += 1
+            if self.waits == 1:
+                execute_quotes(db, s, quotes(), CURRENT)
+                account_before.extend(db.rows(select(paper_accounts)))
+            else:
+                self.done = True
+
+    class Socket:
+        acknowledged = False
+
+        def __enter__(self):
+            connections.append(self)
+            return self
+
+        def __exit__(self, *args):
+            pass
+
+        def send(self, raw):
+            sent.append(json.loads(raw))
+
+        def recv(self, timeout):
+            if not self.acknowledged:
+                self.acknowledged = True
+                return json.dumps({'headers': sent[-1]['headers'], 'errcode': 0})
+            return json.dumps({'cmd': 'aibot_event_callback', 'body': {
+                'event': {'eventtype': 'disconnected_event'}}})
+
+    monkeypatch.setattr('websockets.sync.client.connect', lambda *args, **kwargs: Socket())
+    run(db, s, Stopped())
+    assert len(connections) == 1
+    assert [frame['cmd'] for frame in sent] == ['aibot_subscribe']
+    notices = db.rows(select(wecom_outbox))
+    assert len(notices) == 2
+    assert all(record['status'] == 'pending' and record['attempts'] == 0 for record in notices)
+    assert queue_notifications(db, s) == 0
+    assert db.rows(select(paper_accounts)) == account_before
+
+
+def test_recovery_labels_delayed_notifications_and_never_resends_accepted_fills(wecom_settings, db, monkeypatch):
+    s = replace(wecom_settings, wecom_chat_id='owner')
+    monkeypatch.setattr('stock_daily.wecom.now', lambda: CURRENT)
+    target(db, s)
+    setup(db)
+    execute_quotes(db, s, quotes(), CURRENT)
+    before = db.rows(select(paper_accounts))
+    monkeypatch.setattr('stock_daily.wecom.now', lambda: CURRENT + timedelta(minutes=10))
+    assert queue_notifications(db, s) == 2
+    records = db.rows(select(wecom_outbox))
+    assert all(record['content'].startswith('**补发成交提醒') for record in records)
+    sent = []
+
+    class Sender:
+        def send(self, *args):
+            sent.append(args)
+
+    while deliver_one(db, s, Sender()):
+        pass
+    assert len(sent) == 2
+    assert queue_notifications(db, s) == 0
+    assert not deliver_one(db, s, Sender())
+    assert db.rows(select(paper_accounts)) == before

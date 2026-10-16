@@ -9,6 +9,7 @@ from .backtest import position_value
 from .config import SHANGHAI, now
 from .db import bars, sessions, signals, trading_days
 from .operations import state
+from .performance import account_pnl
 from .providers import DataError, make_provider
 
 
@@ -170,4 +171,5 @@ def value_portfolio(db, settings, simulation, current=None):
                            "benchmark_return": benchmark_return, "through": day},
                   message=("行情已过期，显示最后保存的盘中估值。" if stale else "")
                   + f"已确认持仓基于{summary['through']}；盘中仅更新估值，现金与成交仍按日线核验。")
+    result["summary"].update(account_pnl(result["summary"], simulation["curve"]))
     return result

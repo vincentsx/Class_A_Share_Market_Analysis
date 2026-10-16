@@ -5,6 +5,27 @@ from collections import defaultdict
 from statistics import mean, stdev
 
 
+def account_pnl(summary, curve):
+    """Compare the marked account with the preceding close, never round-trip trade profit."""
+    day, equity, capital = (summary.get(k) for k in ("through", "equity", "initial_capital"))
+    result = {"daily_profit": None, "daily_return": None, "daily_profit_day": day,
+              "daily_profit_basis_day": None, "daily_profit_basis_equity": None,
+              "cumulative_profit": None, "cumulative_return": None}
+    if not day or equity is None or capital is None or capital <= 0:
+        return result
+    result.update(cumulative_profit=equity - capital, cumulative_return=(equity / capital - 1) * 100)
+    prior = [point for point in curve if point["day"] < day]
+    baseline = max(prior, key=lambda point: point["day"]) if prior else None
+    # Same-day points are never a baseline, including repeated intraday updates.
+    basis = baseline["equity"] if baseline else capital
+    if basis is None or basis <= 0:
+        return result
+    result.update(daily_profit=equity - basis, daily_return=(equity / basis - 1) * 100,
+                  daily_profit_basis_day=baseline["day"] if baseline else None,
+                  daily_profit_basis_equity=basis)
+    return result
+
+
 def performance(curve, trades, positions, capital):
     daily = [b["equity"] / a["equity"] - 1 for a, b in zip(curve, curve[1:])]
     n = len(daily)
