@@ -288,6 +288,27 @@ def test_phone_realtime_ai_news_filters_history_and_refresh_without_reload(brows
         assert page.evaluate('data.report.window') == latest['report']['window']
 
 
+def test_phone_realtime_opinions_show_name_from_matching_frozen_evidence(browser, db, config, tmp_path):
+    capture(db, config)
+    payload = view(db, config, current=CURRENT)
+    report = payload['report']
+    report['evidence'].append({'id': 'stock-600001.SH', 'title': '观察公司模拟交易观察',
+        'text': json.dumps({'code': '600001.SH', 'name': '观察公司<img src=x onerror=alert(1)>'})})
+    report['ai']['trade_policy'] = {'status': 'available', 'text': '等待核验', 'market_action': 'normal',
+        'stocks': [{'code': '600001.SH', 'action': 'wait', 'score': 30,
+            'text': '等待确认', 'evidence_ids': ['stock-600001.SH']}]}
+    path = tmp_path / 'realtime.html'
+    path.write_text(render(payload, config, public=True))
+    with browser.new_context(viewport={'width': 390, 'height': 844}) as context:
+        page = context.new_page()
+        page.route('https://raw.githubusercontent.com/**', lambda route: route.abort())
+        page.goto(path.as_uri())
+        page.wait_for_function('() => window.REALTIME_READY === true')
+        heading = page.get_by_role('heading', name='观察公司<img src=x onerror=alert(1)> · 600001.SH · 等待', exact=True)
+        assert heading.is_visible() and heading.locator('img').count() == 0
+        assert not page.evaluate('document.documentElement.scrollWidth > innerWidth')
+
+
 def test_transient_ai_errors_retry_same_evidence_then_succeed(db, config, monkeypatch):
     capture(db, config)
     report = view(db, config, current=CURRENT)['report']

@@ -85,9 +85,22 @@ def test_live_quotes_do_not_trigger_large_site_rebuilds(populated, tmp_path, mon
 
 
 def test_deployment_refreshes_old_public_interface_without_private_inputs(populated, tmp_path):
+    import re
+
     db, settings, _ = populated
     folder = tmp_path / 'public'
     export_pages(db, settings, folder, render_image=fake_png)
+    manifest = json.loads((folder / 'manifest.json').read_text())
+    portfolio = next(r for r in manifest['reports'] if r['slot'] == 'portfolio')
+    path = folder / portfolio['html']
+    html = path.read_text()
+    pattern = r'(<script id="offline-snapshot" type="application/json">)(.*?)(</script>)'
+    payload = json.loads(re.search(pattern, html, re.S)[2])
+    for key in list(payload['backtest']['summary']):
+        if key.startswith(('daily_profit', 'daily_return', 'cumulative_')):
+            payload['backtest']['summary'].pop(key)
+    original_fills = payload['backtest']['fills']
+    path.write_text(re.sub(pattern, lambda m: m[1] + json.dumps(payload) + m[3], html, flags=re.S))
     spec = importlib.util.spec_from_file_location('refresh_ui', '.github/scripts/refresh_public_ui.py')
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -98,6 +111,10 @@ def test_deployment_refreshes_old_public_interface_without_private_inputs(popula
     assert 'connect-src https://raw.githubusercontent.com' in html
     assert 'refreshPublicPortfolio' in html
     assert 'https://raw.githubusercontent.com/example/reports/pages-live/portfolio.json' in html
+    refreshed = json.loads(re.search(pattern, html, re.S)[2])
+    assert refreshed['backtest']['summary']['daily_profit'] is not None
+    assert refreshed['backtest']['summary']['cumulative_profit'] == pytest.approx(refreshed['backtest']['summary']['profit'])
+    assert refreshed['backtest']['fills'] == original_fills
     import hashlib
     for name in [portfolio['html'], 'index.html']:
         assert hashlib.sha256((folder / name).read_bytes()).hexdigest() == manifest['files'][name]

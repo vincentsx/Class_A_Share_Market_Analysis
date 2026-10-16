@@ -47,7 +47,7 @@ function render() {
   if(ai.trade_policy?.status === "available") {
     const policy=ai.trade_policy;
     const panel=document.createElement("section");panel.className="panel";
-    panel.innerHTML=`<h2>模拟交易意见</h2><p>${esc(policy.text)} · ${esc({normal:"正常风险",reduce:"风险减半",pause:"暂停新增"}[policy.market_action])}</p><div class="news-grid">${policy.stocks.map(i=>`<article class="ai-block"><h3>${esc(i.code)} · ${esc({support:"支持观察买入",wait:"等待",exit:"退出意见"}[i.action])}</h3><p>${esc(i.text)}</p><small>判断强度 ${i.score}/100（非胜率） · ${references(i.evidence_ids)}</small></article>`).join("")}</div><p class="meta">仅提供决策意见；报价确认、T+1、资金和止损等约束优先。成交详情保存实际采用的意见。</p>`;
+    panel.innerHTML=`<h2>模拟交易意见</h2><p>${esc(policy.text)} · ${esc({normal:"正常风险",reduce:"风险减半",pause:"暂停新增"}[policy.market_action])}</p><div class="news-grid">${policy.stocks.map(i=>`<article class="ai-block"><h3>${esc(GuanshiEvidence.stockLabel(i.code,r.evidence))} · ${esc({support:"支持观察买入",wait:"等待",exit:"退出意见"}[i.action])}</h3><p>${esc(i.text)}</p><small>判断强度 ${i.score}/100（非胜率） · ${references(i.evidence_ids)}</small></article>`).join("")}</div><p class="meta">仅提供决策意见；报价确认、T+1、资金和止损等约束优先。成交详情保存实际采用的意见。</p>`;
     $("content").append(panel);
   }
   window.REALTIME_READY=true;

@@ -7,6 +7,12 @@
   const stamp = v => String(v || "").slice(0,19).replace("T"," ");
   const url = v => {try {const u=new URL(v);return /^https?:$/.test(u.protocol)&&!u.username&&!u.password?u.href:"";} catch (_) {return "";}};
   let sequence = 0;
+  function stockLabel(code, cards=[]) {
+    const card=cards.find(item=>item.id===`stock-${code}`);
+    let stock;try {stock=JSON.parse(card?.text);} catch (_) {return code;}
+    const name=typeof stock?.name==="string"?stock.name.trim():"";
+    return stock?.code===code&&name&&name!==code?`${name} · ${code}`:code;
+  }
   function describe(cards=[]) {
     return cards.map((card,index) => {
       const item={id:card.id,number:index+1,title:card.title||"报告依据",kind:"报告资料",facts:[],groups:[],text:"",time:card.published_at,sources:card.sources||[]};
@@ -69,5 +75,5 @@
   const restore = (root,keys) => root.querySelectorAll('.analysis-sources[data-evidence-key]').forEach(e=>{
     if(keys.has(e.dataset.evidenceKey))e.open=true;
   });
-  window.GuanshiEvidence={describe,references,render,remember,restore};
+  window.GuanshiEvidence={describe,references,render,remember,restore,stockLabel};
 })();

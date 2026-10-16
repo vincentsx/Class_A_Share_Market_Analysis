@@ -37,6 +37,9 @@ def refresh(folder, repository, assets, live_plan=None):
     fill_spec = importlib.util.spec_from_file_location('public_fill_history', assets / 'fills.py')
     fill_helpers = importlib.util.module_from_spec(fill_spec)
     fill_spec.loader.exec_module(fill_helpers)
+    pnl_spec = importlib.util.spec_from_file_location('public_account_metrics', assets / 'performance.py')
+    pnl_helpers = importlib.util.module_from_spec(pnl_spec)
+    pnl_spec.loader.exec_module(pnl_helpers)
     env = Environment(loader=FileSystemLoader(assets / 'templates'), autoescape=select_autoescape(['html']))
     helpers.template_helpers(env)
     appearance = {
@@ -76,6 +79,12 @@ def refresh(folder, repository, assets, live_plan=None):
         payload = json.loads(match[1])
         if not payload.get('public'):
             raise ValueError('Daily report must be public')
+        # Old deployed bundles may predate the new cards. Derive their metrics
+        # from the same frozen account and curve without rewriting any fills.
+        account = payload.get('backtest') or {}
+        for summary in (account.get('summary'), account.get('valuation', {}).get('summary')):
+            if summary:
+                summary.update(pnl_helpers.account_pnl(summary, account.get('curve', [])))
         if (live_plan and live_plan.get('source') == payload['dashboard']['source']
                 and live_plan.get('report_day') == payload['dashboard']['report']['day']
                 and live_plan.get('trade_plan', {}).get('basis_day') == payload['dashboard']['report']['day']):

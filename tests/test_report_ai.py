@@ -1,3 +1,4 @@
+import json
 from copy import deepcopy
 from dataclasses import replace
 
@@ -11,6 +12,33 @@ from test_realtime import fake_analysis
 from stock_daily.db import report_analyses
 from stock_daily.realtime_ai import analyze
 from stock_daily.report_ai import cached, generate, research_input
+
+
+def test_phone_stock_opinions_show_frozen_name_and_code_without_rewriting_data(browser, populated, tmp_path):
+    from stock_daily.html_export import daily_payload, render_daily
+
+    db, settings, _ = populated
+    payload = daily_payload(db, settings, public=True, portfolio=True)
+    evidence = [{'id': 'stock-000892.SZ', 'title': '欢瑞世纪模拟交易观察',
+        'text': json.dumps({'code': '000892.SZ', 'name': '欢瑞世纪'})}]
+    payload['backtest']['decision_context'] = {'enabled': True, 'status': 'available', 'method': '测试口径',
+        'evidence': evidence, 'opinions': {'000892.SZ': {'action': 'wait', 'score': 30,
+            'text': '等待确认', 'evidence_ids': ['stock-000892.SZ']}}}
+    original = deepcopy(payload)
+    path = tmp_path / 'portfolio.html'
+    path.write_text(render_daily(payload, settings))
+    with browser.new_context(viewport={'width': 390, 'height': 844}) as context:
+        page = context.new_page()
+        page.goto(path.as_uri())
+        page.wait_for_function("() => window.REPORT_READY === true && currentView === 'backtest'")
+        page.get_by_text('逐股意见 · 1 只', exact=True).click()
+        assert page.get_by_role('heading', name='欢瑞世纪 · 000892.SZ · 等待', exact=True).is_visible()
+        assert page.locator('[data-account-field="daily_profit"]').is_visible()
+        assert page.locator('[data-account-field="profit"] h3').inner_text() == '累计盈亏'
+        assert page.evaluate("GuanshiEvidence.stockLabel('600000.SH', [{id:'stock-600000.SH', text:'bad-json'}])") == '600000.SH'
+        assert page.evaluate("GuanshiEvidence.stockLabel('600000.SH', [{id:'stock-600000.SH', text:JSON.stringify({code:'600001.SH',name:'其他公司'})}])") == '600000.SH'
+        assert not page.evaluate('document.documentElement.scrollWidth > innerWidth')
+    assert payload == original
 
 
 @pytest.mark.parametrize('javascript', [False, True])
