@@ -152,6 +152,14 @@ function eventLink(event) {
 }
 function renderOperations(data) {
   if (!$("operations-content")) return;
+  if ($("wecom-warning")) {
+    const wecom = data?.wecom, counts = wecom?.counts || {};
+    const pending = (counts.pending || 0) + (counts.sending || 0);
+    const problem = {conflict:"机器人连接被其他服务接管，推送已暂停；请停用其他服务的同一机器人接入后恢复本项目连接",stale:"机器人连接心跳过期",stopped:"机器人连接已停止",reconnecting:"机器人正在重新连接"}[wecom?.connection?.status];
+    const warning = wecom?.enabled && wecom.bound && (problem || counts.failed);
+    $("wecom-warning").hidden = !warning;
+    $("wecom-warning").textContent = warning ? `企业微信成交提醒异常：${problem || "存在发送失败的提醒"}。待发 ${pending} 笔，失败 ${counts.failed || 0} 笔；成交记录已保留，行情刷新不会重新交易。` : "";
+  }
   if (!data) { $("operations-panel").hidden = true; return; }
   const labels = {running:"运行中", stopped:"已停止", stale:"心跳已过期", unknown:"尚未记录心跳"};
   $("worker-chip").textContent = labels[data.worker.status] || data.worker.status;

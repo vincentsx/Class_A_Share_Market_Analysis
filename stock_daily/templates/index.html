@@ -44,7 +44,7 @@
       {% if not offline %}<details class="update-schedule"><summary>报告更新与导出 <span>午间 / 收盘 / 日线</span></summary><p>{{ midday_time }}午间快照 / {{ schedule_time }}收盘快照 / {{ announcement_time }}日线分析；盘中持仓每{{ portfolio_interval_minutes }}分钟更新模拟买卖、持仓和资金。<a href="/artifacts/{{ source }}-latest.html" target="_blank" rel="noopener">查看最新HTML</a> · <a href="/artifacts/{{ source }}-latest.png" target="_blank" rel="noopener">查看最新PNG</a>。下方工作台显示已核验的日线报告。</p></details>{% endif %}
       {% if offline %}{% with mail=static_report %}{% include "mail_report.html" %}{% endwith %}{% endif %}
       <div id="message" class="notice" role="status" hidden></div>
-      {% if not offline %}<div id="email-status" class="notice" role="status" hidden></div>{% endif %}
+      {% if not offline %}<div id="email-status" class="notice" role="status" hidden></div><div id="wecom-warning" class="notice error" role="status" hidden></div>{% endif %}
       {% if not public_report %}<details id="operations-panel" class="panel research-panel"><summary>运行健康与备份 <span id="worker-chip" class="chip">检查中</span></summary><div id="operations-content" class="research-body"></div></details>{% endif %}
       <div id="empty" class="empty-state" hidden><div class="empty-icon">◫</div><h2 id="empty-title">第一份复盘，等待生成。</h2><p id="empty-help">{{ '初始化合成示例后即可浏览。' if source == 'demo' else '请运行盘后采集。非交易日用 --date 指定实际交易日，首次需要补齐历史。' }}</p><code id="empty-command">.venv/bin/python -m stock_daily {{ 'demo' if source == 'demo' else 'run' }}</code>{% if source == 'baostock' %}<p>BaoStock 覆盖的沪深A股，不含北交所；公告由 AKShare 补查。</p>{% endif %}</div>
       <div id="report-content" hidden>

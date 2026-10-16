@@ -102,6 +102,29 @@ def test_theme_still_works_when_browser_storage_is_unavailable(ui_context):
     assert not errors
 
 
+def test_wecom_connection_conflict_is_visible_without_expanding_operations(ui_context):
+    page = ui_context.new_page()
+    page.goto("http://guanshi.test/")
+    page.wait_for_function("() => window.REPORT_READY === true")
+    assert page.locator("#operations-panel").evaluate("node => node.open") is False
+    page.evaluate("""() => {
+        state.health.wecom = {enabled: true, bound: true,
+            connection: {status: 'conflict'}, counts: {pending: 2, sent: 9}};
+        renderOperations(state.health);
+    }""")
+    assert page.locator("#wecom-warning").is_visible()
+    assert "被其他服务接管" in page.locator("#wecom-warning").inner_text()
+    assert "待发 2 笔" in page.locator("#wecom-warning").inner_text()
+    page.get_by_role("button", name="模拟持仓", exact=True).click()
+    assert page.locator("#wecom-warning").is_visible()
+    page.evaluate("""() => {
+        state.health.wecom.connection.status = 'authenticated';
+        state.health.wecom.counts = {sent: 11};
+        renderOperations(state.health);
+    }""")
+    assert page.locator("#wecom-warning").is_hidden()
+
+
 def test_responsive_workbench_navigation_filters_and_dialogs(ui_context):
     page = ui_context.new_page()
     page.goto("http://guanshi.test/")

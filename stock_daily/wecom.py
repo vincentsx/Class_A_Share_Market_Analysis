@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 MAX_ATTEMPTS = 4
 ACK_TIMEOUT = 10
 HEARTBEAT_SECONDS = 30
+DELAYED_NOTICE = "**补发成交提醒：以原成交时间为准，未重新交易。**\n"
 
 
 def digest(value):
@@ -150,7 +151,7 @@ def queue_notifications(db, settings):
         content = trade_content(event["payload"])
         if (event["created_at"] < bound["bound_at"]
                 or datetime.fromisoformat(event["created_at"]) < current - timedelta(minutes=2)):
-            content = "**补发成交提醒：以原成交时间为准，未重新交易。**\n" + content
+            content = DELAYED_NOTICE + content
         try:
             with db.engine.begin() as connection:
                 connection.execute(wecom_outbox.insert().values(id=identifier, source=settings.source,
@@ -244,13 +245,18 @@ def deliver_one(db, settings, client):
     if not rows:
         return False
     record = rows[0]
+    content = record["content"]
+    if (record["attempts"] == 0 and not content.startswith(DELAYED_NOTICE)
+            and datetime.fromisoformat(record["created_at"]) < current - timedelta(minutes=2)):
+        content = DELAYED_NOTICE + content
     with db.engine.begin() as connection:
         claimed = connection.execute(update(wecom_outbox).where(wecom_outbox.c.id == record["id"], eligible)
-            .values(status="sending", attempts=wecom_outbox.c.attempts + 1, last_attempt_at=current.isoformat()))
+            .values(status="sending", attempts=wecom_outbox.c.attempts + 1,
+                    last_attempt_at=current.isoformat(), content=content))
         if claimed.rowcount != 1:
             return False
     try:
-        client.send(record["chat_id"], record["content"], "trade_" + record["id"][:32])
+        client.send(record["chat_id"], content, "trade_" + record["id"][:32])
     except Exception as error:
         message = str(error) if isinstance(error, ProtocolError) else "企业微信发送失败或确认超时，将重试（可能已接收，以成交编号核对）"
         with db.engine.begin() as connection:

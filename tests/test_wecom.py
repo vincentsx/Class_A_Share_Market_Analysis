@@ -312,3 +312,32 @@ def test_recovery_labels_delayed_notifications_and_never_resends_accepted_fills(
     assert queue_notifications(db, s) == 0
     assert not deliver_one(db, s, Sender())
     assert db.rows(select(paper_accounts)) == before
+
+
+def test_messages_queued_before_disconnect_get_delayed_label_once_on_first_send(wecom_settings, db, monkeypatch):
+    from stock_daily.wecom import DELAYED_NOTICE
+
+    s = replace(wecom_settings, wecom_chat_id='owner')
+    clock = [CURRENT]
+    monkeypatch.setattr('stock_daily.wecom.now', lambda: clock[0])
+    setup(db)
+    execute_quotes(db, s, quotes(), CURRENT)
+    queue_notifications(db, s)
+    before = db.rows(select(paper_accounts))
+    original = db.rows(select(wecom_outbox))
+    assert all(not record['content'].startswith(DELAYED_NOTICE) for record in original)
+    clock[0] += timedelta(hours=3)
+    sent = []
+
+    class Sender:
+        def send(self, chat, content, request_id):
+            sent.append((content, request_id))
+
+    while deliver_one(db, s, Sender()):
+        pass
+    assert len(sent) == 2
+    assert all(content.startswith(DELAYED_NOTICE) and content.count(DELAYED_NOTICE) == 1 for content, _ in sent)
+    assert {request_id for _, request_id in sent} == {'trade_' + record['id'][:32] for record in original}
+    assert all(record['status'] == 'sent' and record['attempts'] == 1 for record in db.rows(select(wecom_outbox)))
+    assert not deliver_one(db, s, Sender())
+    assert db.rows(select(paper_accounts)) == before
