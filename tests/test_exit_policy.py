@@ -7,7 +7,7 @@ from test_paper_trading import CURRENT, quotes, setup
 
 from stock_daily.backtest import fees, simulation_profile
 from stock_daily.db import Database, bars, paper_accounts, trading_days
-from stock_daily.exit_policy import advance, break_even, context
+from stock_daily.exit_policy import POLICY, advance, break_even, context, initial_protection
 from stock_daily.paper_trading import annotate_plan, current_account, execute_quotes
 from stock_daily.trade_plan import build_trade_plan
 
@@ -31,6 +31,63 @@ def test_initial_stop_uses_tighter_structure_atr_and_loss_cap():
     assert p["exit_due"] == "盘中风险止损触发"
     assert p["exit_trigger_kind"] == "quote" and p["exit_trigger_price"] == 9.59
     assert p["exit_trigger_close"] is None
+
+
+@pytest.mark.parametrize("structural,atr,expected", [
+    (9.99, .2, 9.8),  # a nearby daily reference must leave one ATR of initial room
+    (9.7, .2, 9.7),
+    (9, .2, 9.6),  # the existing two-ATR ceiling remains
+    (9.99, .9, 9.4),  # the six-percent cap wins when one ATR would exceed it
+])
+def test_only_explicit_new_policy_uses_atr_floor_and_shares_frozen_sizing_risk(structural, atr, expected):
+    p = {**position(), "invalidation_price": structural}
+    protection = initial_protection(p["entry_price"], structural, atr)
+    advance(p, tick(10), {"atr": atr, "basis_day": "20261014"}, simulation_profile(), policy=POLICY)
+    state = p["exit_policy"]
+    assert state["version"] == "exit-v3" and state["min_initial_atr"] == 1
+    assert state["initial_stop"] == state["stop"] == pytest.approx(expected)
+    assert protection["initial_stop"] == pytest.approx(expected)
+    assert protection["risk_distance"] == pytest.approx(p["entry_price"] - expected)
+    assert not protection["atr_missing"] and not state["atr_missing"]
+    assert state["risk_unit"] == pytest.approx(max(10 - expected, atr, .001))
+    assert p["exit_due"] is None
+
+
+def test_default_initialization_preserves_legacy_nearby_structural_stop():
+    p = {**position(), "invalidation_price": 9.99}
+    advance(p, tick(10), {"atr": .2, "basis_day": "20261014"}, simulation_profile())
+    assert p["exit_policy"]["version"] == "exit-v2"
+    assert p["exit_policy"]["initial_stop"] == pytest.approx(9.99)
+
+
+@pytest.mark.parametrize("atr", [None, 0, float("nan")])
+def test_new_policy_missing_atr_marks_legacy_fallback_without_inventing_volatility(atr):
+    p = {**position(), "invalidation_price": 9.99}
+    advance(p, tick(10), {"atr": atr, "basis_day": "20261014"}, simulation_profile(), policy=POLICY)
+    state = p["exit_policy"]
+    assert state["version"] == "exit-v3" and state["atr_missing"]
+    assert state["atr"] is None and state["initial_stop"] == pytest.approx(9.99)
+    assert initial_protection(10, 9, atr)["initial_stop"] == pytest.approx(9.4)
+
+
+def test_existing_v2_state_keeps_all_frozen_parameters_and_only_raises_protection():
+    p = {**position(), "invalidation_price": 9.99}
+    config = simulation_profile()
+    advance(p, tick(10), {"atr": .2, "basis_day": "20261014"}, config)
+    state = p["exit_policy"]
+    # A previously stored v2 state has neither of the new metadata fields.
+    state.pop("min_initial_atr")
+    state.pop("atr_missing")
+    before = deepcopy(state)
+    advance(p, tick(10, 10), {"atr": .9, "basis_day": "20261014"}, config, policy=POLICY)
+    assert state == {**before, "last_quote_time": tick(10, 10)["quote_time"]}
+    advance(p, tick(10.5, 20), {"atr": .9, "basis_day": "20261015"}, config, policy=POLICY)
+    assert state == {**before, "peak": 10.5, "stop": pytest.approx(10.1),
+        "last_quote_time": tick(10.5, 20)["quote_time"], "basis_day": "20261015", "trailing_active": True}
+    advance(p, tick(10.4, 30), {"atr": 2, "basis_day": "20261015"}, config, policy=POLICY)
+    assert state["version"] == "exit-v2" and state["stop"] == pytest.approx(10.1)
+    assert state["initial_stop"] == pytest.approx(9.99) and state["atr"] == .2
+    assert "min_initial_atr" not in state and "atr_missing" not in state
 
 
 def test_trailing_activation_high_watermark_and_break_even_include_costs():

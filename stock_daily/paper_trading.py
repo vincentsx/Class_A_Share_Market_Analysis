@@ -11,11 +11,11 @@ from .backtest import board, effective_config, fees, position_value, simulate, s
 from .config import SHANGHAI, now
 from .db import bars, paper_accounts, paper_quote_batches, reports, sessions, signals, trading_days
 from .decision_ai import assessment, configured_policy, decision_context, latest_analysis
+from .entry_policy import LEGACY_INVALIDATION_CANCELLATIONS, confirmation, rank_key
 from .entry_policy import METHOD as ENTRY_METHOD
 from .entry_policy import VERSION as ENTRY_VERSION
-from .entry_policy import confirmation, rank_key
 from .execution import entry_guard, entry_size, industry_of, market_gate
-from .exit_policy import POLICY, advance, context
+from .exit_policy import POLICY, advance, context, initial_protection
 from .fills import make_fill
 from .performance import account_pnl, performance
 
@@ -204,6 +204,22 @@ def execute_quotes(db, settings, payload, current=None):
                 if p.get("exit_due"):
                     p["exit_due"] = p["exit_due"].replace("下一可模拟开盘", "下一有效盘中报价")
         account = record["account"]
+        entry_policy = account.get("entry_policy", {})
+        activated_at = entry_policy.get("activated_at", current.isoformat())
+        migration = entry_policy.get("migration")
+        if entry_policy.get("version") != ENTRY_VERSION:
+            activated_at = current.isoformat()
+            released = [{"key": key, "reason": reason} for key, reason in record["attempts"].items()
+                        if reason in LEGACY_INVALIDATION_CANCELLATIONS]
+            for attempt in released:
+                del record["attempts"][attempt["key"]]
+            if entry_policy.get("version") or released:
+                previous_migration = migration
+                migration = {"from_version": entry_policy.get("version", "entry-intraday-v1"),
+                    "to_version": ENTRY_VERSION, "activated_at": activated_at,
+                    "released_attempts": released}
+                if previous_migration:
+                    migration["previous"] = previous_migration
         config = effective_config(simulation_profile(), day)
         prior = {r["code"]: r for r in db.rows(select(bars).where(bars.c.source == settings.source, bars.c.day == basis))}
         prior_session = db.rows(select(sessions).where(sessions.c.source == settings.source, sessions.c.day == basis))
@@ -220,7 +236,9 @@ def execute_quotes(db, settings, payload, current=None):
             paper_quote_batches.c.source == settings.source, paper_quote_batches.c.day == day,
             paper_quote_batches.c.captured_at < payload["captured_at"])
             .order_by(paper_quote_batches.c.captured_at.desc()).limit(1))
-        previous_quotes = previous_batches[0]["payload"]["quotes"] if previous_batches else {}
+        # An older policy's observation cannot confirm a trade under a newly enabled rule.
+        previous_quotes = previous_batches[0]["payload"]["quotes"] if (
+            previous_batches and previous_batches[0]["payload"].get("version") == ENTRY_VERSION) else {}
         errors = {p["code"]: error for p in account["positions"]
             if (error := _quote_error(quotes.get(p["code"]), prior.get(p["code"]), day, current))}
         ai_context = decision_context(db, settings, current)
@@ -253,14 +271,15 @@ def execute_quotes(db, settings, payload, current=None):
             limit, _ = board(code)
             price = q["price"] * (1 - config.slippage_bps / 10000)
             if (limit is None or q["price"] <= prior[code]["close"] * (1 - limit + .001)
-                    or price < q["low"] or p["shares"] > prior[code]["volume"] * config.participation):
-                decisions[code] = "退出等待：跌停、滑点超出已观察范围或前日量能不足"
+                    or p["shares"] > prior[code]["volume"] * config.participation):
+                decisions[code] = "退出等待：跌停或前日量能不足"
                 continue
             gross = p["shares"] * price
             cost = fees(gross, config, sell=True)
             cash += gross - cost
             trade = {**p, "exit_day": day, "exit_price": price, "exit_open": q["open"],
                 "exit_reference_price": q["price"], "exit_time": q["quote_time"],
+                "exit_observed_low": q["low"], "exit_slippage_below_low": price < q["low"],
                 "exit_confirmed_at": current.isoformat(), "exit_basis": "quote",
                 "exit_fee": cost, "fees": p["entry_fee"] + cost, "proceeds": gross - cost,
                 "profit": gross - cost - p["spent"], "exit_reason": p["exit_due"],
@@ -344,14 +363,21 @@ def execute_quotes(db, settings, payload, current=None):
             if error:
                 decisions[code] = error
                 continue
-            gate = market_gate(report, config) or entry_guard(config, q["open"], previous, item)
+            # The fixed opening gap still cancels entry. A dip below the daily reference
+            # price is handled by live confirmation instead of locking out the whole day.
+            gate = market_gate(report, config) or entry_guard(
+                replace(config, require_valid_entry=False), q["open"], previous, item)
             if gate:
                 record["attempts"][key] = gate
                 continue
             gate = entry_guard(config, q["price"], previous, item)
-            if account["execution_state"].get("entry_paused") or gate:
-                decisions[code] = (gate.replace("开盘", "当前报价").replace("取消本次入场", "等待后续刷新")
-                                   if gate else "组合回撤暂停新增仓位")
+            if account["execution_state"].get("entry_paused"):
+                evaluations[key]["status"] = "waiting"
+                decisions[code] = "组合回撤暂停新增仓位"
+                continue
+            if gate:
+                decisions[code] = (evaluations[key]["reason"] if evaluations[key]["status"] == "paused" else
+                    gate.replace("开盘", "当前报价").replace("取消本次入场", "等待后续刷新"))
                 continue
             if evaluations[key]["status"] != "eligible":
                 decisions[code] = evaluations[key]["reason"]
@@ -367,9 +393,12 @@ def execute_quotes(db, settings, payload, current=None):
             industry = industry_of(item)
             exposure = sum(p["shares"] * p["mark"] for p in positions.values() if p["industry"] == industry)
             sizing_config = replace(config, weight=config.weight * .5, risk_fraction=config.risk_fraction * .5)                 if ai_context.get('market_action') == 'reduce' else config
+            protection = initial_protection(price, item["invalidation_adj"] / previous["adj"], item.get("atr14"))
             sizing = entry_size(sizing_config, cash=cash, equity=equity, price=price, previous=previous,
                 payload=item, lot=lot, industry_value=exposure,
-                volume_capacity=evaluations[key]["interval_volume"] * config.participation)
+                volume_capacity=evaluations[key]["interval_volume"] * config.participation,
+                risk_stop=protection["initial_stop"])
+            sizing["exit_policy_version"] = POLICY.version
             sizing["interval_volume_capacity"] = evaluations[key]["interval_volume"] * config.participation
             if sizing["reason"]:
                 decisions[code] = sizing["reason"]
@@ -392,7 +421,7 @@ def execute_quotes(db, settings, payload, current=None):
                 "invalidation_price": item["invalidation_adj"] / previous["adj"],
                 "invalidation_adj": item["invalidation_adj"], "exit_due": None, "exit_trigger_day": None,
                 "exit_trigger_close": None, "exit_delays": [], "held_sessions": 0}
-            advance(p, q, {"atr": item.get("atr14"), "basis_day": basis}, config)
+            advance(p, q, {"atr": item.get("atr14"), "basis_day": basis}, config, policy=POLICY)
             positions[code] = p
             account["fills"].insert(0, make_fill(p, settings.source, "buy", sequence=len(account["fills"]) + 1, cash_after=cash))
             record["attempts"][key] = "filled"
@@ -403,11 +432,14 @@ def execute_quotes(db, settings, payload, current=None):
                 evaluation.update(status="filled" if attempt == "filled" else "cancelled",
                     reason="已确认模拟买入" if attempt == "filled" else attempt)
             elif code in decisions:
-                evaluation.update(status="waiting", reason=decisions[code])
+                evaluation.update(status="paused" if evaluation["status"] == "paused" else "waiting",
+                                  reason=decisions[code])
         account["entry_policy"] = {"version": ENTRY_VERSION, "method": ENTRY_METHOD,
-            "activated_at": account.get("entry_policy", {}).get("activated_at", current.isoformat()),
+            "activated_at": activated_at,
             "evaluated_at": current.isoformat(), "basis_day": basis,
             "candidates": [evaluations[f"{basis}|{s['code']}|{s['strategy']}"] for s in ordered]}
+        if migration:
+            account["entry_policy"]["migration"] = migration
         account["positions"] = list(positions.values())
         account["summary"]["available_cash"] = cash
         _summarize(account, day)
@@ -434,7 +466,10 @@ def execute_quotes(db, settings, payload, current=None):
             "盘中风险止损与移动盈利保护优先，连续两日收盘低于MA20退出，持有期10日兜底；"
             "保护线只上移，峰值仅用启用后观察到的报价；已确认成交不撤销。" + ENTRY_METHOD)
         account["execution_version"] = "paper-quote-ai-v1" if settings.ai_trading_enabled else "paper-quote-v3"
-        account["exit_policy"] = {**asdict(POLICY), "activated_at": account.get("exit_policy", {}).get("activated_at", current.isoformat())}
+        old_exit_policy = account.get("exit_policy", {})
+        account["exit_policy"] = {**asdict(POLICY), "scope": "new_positions",
+            "activated_at": old_exit_policy.get("activated_at", current.isoformat())
+                if old_exit_policy.get("version") == POLICY.version else current.isoformat()}
         with db.engine.begin() as connection:
             db.upsert(connection, paper_quote_batches, {"source": settings.source, "day": day,
                 "captured_at": payload["captured_at"], "payload": {"quotes": valid_quotes, "version": ENTRY_VERSION}})

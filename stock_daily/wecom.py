@@ -117,6 +117,8 @@ def trade_content(fill):
         f"成交原因：{clean(fill['reason'])}", f"策略：{clean(fill.get('label') or fill['strategy'])}"]
     if fill["side"] == "sell":
         lines.append(f"该轮扣费已实现盈亏：{fill['realized_profit']:+.2f} 元")
+        if fill.get("exit_slippage_below_low"):
+            lines.append(f"滑点模拟：卖价低于已观察日内最低 {fill['exit_observed_low']:.4f} 元，不代表真实撮合")
     if fill.get("entry_confirmation"):
         e = fill["entry_confirmation"]
         lines += [f"盘中买入确认：{e['version']} · {clean(e['reason'])}",

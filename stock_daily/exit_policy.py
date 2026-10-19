@@ -11,9 +11,10 @@ from .db import bars, signals, trading_days
 
 @dataclass(frozen=True)
 class ExitPolicy:
-    version: str = "exit-v2"
+    version: str = "exit-v3"
     max_loss: float = .06
     initial_atr: float = 2
+    min_initial_atr: float = 1
     trailing_atr: float = 2
     activate_r: float = 2
     trend_days: int = 2
@@ -21,10 +22,27 @@ class ExitPolicy:
 
 
 POLICY = ExitPolicy()
+LEGACY_POLICY = ExitPolicy(version="exit-v2", min_initial_atr=0)
 
 
 def positive(value):
     return isinstance(value, (int, float)) and math.isfinite(value) and value > 0
+
+
+def initial_protection(entry, structural, atr, *, policy=POLICY):
+    """Freeze the stop and per-share risk before sizing a newly opened position.
+
+    The loss cap takes precedence when one ATR would exceed it. Missing ATR
+    preserves the structural/loss-cap fallback rather than inventing volatility.
+    """
+    initial = max(structural, entry * (1 - policy.max_loss))
+    if positive(atr):
+        structural_atr = max(structural, entry - policy.initial_atr * atr)
+        if policy.min_initial_atr:
+            structural_atr = min(structural_atr, entry - policy.min_initial_atr * atr)
+        initial = max(entry * (1 - policy.max_loss), structural_atr)
+    return {"initial_stop": initial, "risk_distance": max(0, entry - initial),
+            "atr_missing": not positive(atr)}
 
 
 def context(db, source, position, cutoff):
@@ -64,19 +82,19 @@ def break_even(position, config):
     return sell_price / (1 - config.slippage_bps / 10000)
 
 
-def advance(position, quote, prior, config):
+def advance(position, quote, prior, config, *, policy=None):
     """Mutate only forward state; a triggered exit stays pending through T+1/limits."""
     entry = position["entry_price"]
     state = position.get("exit_policy")
     if not state:
-        atr = prior.get("atr")
-        stops = [position["invalidation_price"], entry * (1 - POLICY.max_loss)]
-        if positive(atr):
-            stops.append(entry - POLICY.initial_atr * atr)
-        initial = max(stops)
-        state = {**asdict(POLICY), "activated_at": quote["quote_time"], "atr": atr,
+        selected = policy or LEGACY_POLICY
+        atr = prior.get("atr") if positive(prior.get("atr")) else None
+        protection = initial_protection(entry, position["invalidation_price"], atr, policy=selected)
+        initial = protection["initial_stop"]
+        state = {**asdict(selected), "activated_at": quote["quote_time"], "atr": atr,
             "initial_stop": initial, "stop": initial, "peak": max(entry, quote["price"]),
-            "risk_unit": max(entry - initial, atr or 0, entry * .0001), "trailing_active": False,
+            "risk_unit": max(protection["risk_distance"], atr or 0, entry * .0001),
+            "atr_missing": protection["atr_missing"], "trailing_active": False,
             "break_even": break_even(position, config)}
         position["exit_policy"] = state
     state["peak"] = max(state["peak"], quote["price"])

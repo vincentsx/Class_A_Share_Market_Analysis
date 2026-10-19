@@ -45,6 +45,8 @@ def compose_trade(settings, event):
         ("成交编号", fill["id"])]
     if fill["side"] == "sell":
         facts.append(("该轮交易已实现盈亏（扣双边费用）", f"{fill['realized_profit']:+.2f} 元"))
+        if fill.get("exit_slippage_below_low"):
+            facts.append(("滑点模拟说明", f"扣滑点后的模拟卖价低于已观察日内最低 {fill['exit_observed_low']:.4f} 元；不代表真实撮合"))
     entry = fill.get("entry_confirmation")
     if entry:
         facts += [("盘中买入规则", entry["version"]), ("买入确认依据", entry["reason"]),

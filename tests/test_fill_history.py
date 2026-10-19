@@ -130,6 +130,15 @@ def test_phone_history_all_pages_details_filters_csv_and_refresh(browser, popula
         payload["backtest"]["fills"][0]["entry_confirmation"] = evidence
         payload["backtest"]["entry_policy"] = {"version": evidence["version"],
             "evaluated_at": evidence["quote_time"], "method": "盘中候选每次刷新重新确认"}
+        first_buy, first_sell = payload["backtest"]["fills"][:2]
+        for fill, version, distance in ((first_buy, "exit-v2", .01), (first_sell, "exit-v3", .3)):
+            stop = fill["entry_price"] - distance
+            fill["exit_policy"] = {"version": version, "initial_stop": stop, "stop": stop,
+                "trailing_active": False, "risk_unit": .3, "peak": fill["entry_price"],
+                "activated_at": evidence["quote_time"], "atr_missing": False}
+        first_sell.update(exit_slippage_below_low=True, exit_observed_low=first_sell["price"] + .01,
+            entry_risk={"risk_stop": first_sell["exit_policy"]["initial_stop"], "risk_budget": 300,
+                        "estimated_risk": 200, "risk_distance": .3})
     if legacy:
         payload["backtest"].pop("fills")
     path = tmp_path / "history.html"
@@ -160,6 +169,10 @@ def test_phone_history_all_pages_details_filters_csv_and_refresh(browser, popula
             assert "模拟执行序号" in detail.inner_text()
             assert "entry-intraday-v1" in detail.inner_text()
             assert "123456" in detail.inner_text()
+            old_protection = detail.locator('[data-exit-version="exit-v2"]')
+            assert "保留原初始保护" in old_protection.inner_text()
+            assert "1～2ATR" not in old_protection.inner_text()
+            assert detail.locator('[data-exit-slippage-below-low="true"]').count() == 0
         assert not page.evaluate("() => document.documentElement.scrollWidth > innerWidth")
         detail.locator(".close-dialog").click()
         page.locator("#fill-next").click()
@@ -176,6 +189,9 @@ def test_phone_history_all_pages_details_filters_csv_and_refresh(browser, popula
         assert len(rows) == 117  # export the whole filtered history, not only page two.
         if not legacy:
             assert json.loads(rows[0]["盘中买入确认依据"]) == evidence
+            assert rows[1]["卖出滑点低于已观察低点"] == "true"
+            assert float(rows[1]["卖出已观察当日最低价"]) == pytest.approx(first_sell["exit_observed_low"])
+            assert float(rows[1]["风险预算保护价"]) == pytest.approx(first_sell["entry_risk"]["risk_stop"])
         assert len({r["成交编号"] for r in rows}) == 117
         assert all(r["名称"] == "'=观察公司" for r in rows)
         assert all(r["卖出对应交易已实现盈亏"] == "" for r in rows if r["方向"] == "买入")
@@ -193,6 +209,11 @@ def test_phone_history_all_pages_details_filters_csv_and_refresh(browser, popula
         page.locator("#fill-table [data-fill-id]").first.click()
         assert "卖出成交详情" in detail.inner_text()
         assert "包含买卖双边费用" in detail.inner_text()
+        if not legacy:
+            assert "新仓初始保护距离1～2ATR，6%保护线优先" in detail.locator(
+                '[data-exit-version="exit-v3"]').inner_text()
+            assert "风险预算保护价" in detail.inner_text()
+            assert "不代表真实撮合" in detail.locator('[data-exit-slippage-below-low="true"]').inner_text()
         detail.locator(".close-dialog").click()
         page.locator("#fill-reset").click()
         page.locator("#fill-from").fill("2026-10-09")
@@ -218,4 +239,13 @@ def test_phone_history_all_pages_details_filters_csv_and_refresh(browser, popula
         assert page.locator("#static-fill-history .mail-card").count() == 117
         assert "现金变化" in page.locator("#static-fill-history").inner_text()
         assert page.locator("#static-fill-history img").count() == 0
+        if not legacy:
+            old_protection = page.locator('#static-fill-history [data-exit-version="exit-v2"]')
+            assert "保留原初始保护" in old_protection.inner_text()
+            assert "1～2ATR" not in old_protection.inner_text()
+            assert "新仓初始保护距离1～2ATR，6%保护线优先" in page.locator(
+                '#static-fill-history [data-exit-version="exit-v3"]').inner_text()
+            assert "不代表真实撮合" in page.locator(
+                '#static-fill-history [data-exit-slippage-below-low="true"]').inner_text()
+            assert "风险预算保护价" in page.locator("#static-fill-history").inner_text()
         assert not page.evaluate("() => document.documentElement.scrollWidth > innerWidth")

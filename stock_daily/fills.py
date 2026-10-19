@@ -42,6 +42,8 @@ def make_fill(position, source, side, *, sequence=None, cash_after=None):
             "exit_trigger_kind": position.get("exit_trigger_kind", "daily") if sell else None,
             "exit_trigger_time": position.get("exit_trigger_time") if sell else None,
             "exit_trigger_price": position.get("exit_trigger_price") if sell else None,
+            "exit_observed_low": position.get("exit_observed_low") if sell else None,
+            "exit_slippage_below_low": bool(position.get("exit_slippage_below_low")) if sell else False,
             "exit_policy": dict(position["exit_policy"]) if position.get("exit_policy") else None,
             "exit_delays": position.get("exit_delays", []) if sell else [],
             "origin": "model_execution" if sequence is not None else "legacy_derived"}

@@ -188,6 +188,12 @@ def test_phone_and_scriptless_daily_plan(populated, tmp_path, monkeypatch):
     payload = daily_payload(db, settings)
     plan = payload["dashboard"]["report"]["trade_plan"]
     assert plan["status"] == "ready"
+    observations = [("paused", "暂缓买入", "报价不高于失效参考价，等待重新站回确认"),
+                    ("waiting", "等待连续确认", "已站回失效参考价，等待连续有效报价确认")]
+    assert len(plan["entries"]) >= len(observations)
+    for item, (status, _, reason) in zip(plan["entries"], observations):
+        item.update(status="watch", intraday={"version": "entry-intraday-v3", "status": status,
+            "reason": reason, "evaluated_at": "2026-10-15T10:00:00+08:00"})
     path = tmp_path / "planned.html"
     path.write_text(render_daily(payload, settings))
     with api.sync_playwright() as p:
@@ -201,15 +207,31 @@ def test_phone_and_scriptless_daily_plan(populated, tmp_path, monkeypatch):
             page.goto(path.as_uri())
             page.locator("#trade-plan-content .notice").wait_for()
             assert "2026.10.15" in page.locator("#trade-plan-content").inner_text()
+            page.locator("#trade-plan-content details").filter(
+                has=page.locator('[data-entry-status="paused"]')).locator("summary").first.click()
             for label in ["待卖出", "待买入候选", "继续持有", "仅观察", "参考股数"]:
                 assert label in page.locator("#trade-plan-content").inner_text()
+            for status, label, reason in observations:
+                node = page.locator(f'#trade-plan-content [data-entry-status="{status}"]')
+                assert label in node.inner_text()
+                assert reason in node.inner_text()
+                assert "entry-intraday-v3" in node.inner_text()
+                assert "当日已取消" not in node.inner_text()
             assert not page.evaluate("() => document.documentElement.scrollWidth > innerWidth")
             assert not errors
         with browser.new_context(java_script_enabled=False) as context:
             page = context.new_page()
             page.goto(path.as_uri())
+            page.locator("#static-report details").filter(
+                has=page.locator('[data-entry-status="paused"]')).locator("summary").first.click()
             text = page.locator("#static-report").inner_text()
             assert "下一交易日模拟交易计划" in text
             assert "20261015" in text
             assert "参考股数" in text
+            for status, label, reason in observations:
+                node = page.locator(f'#static-report [data-entry-status="{status}"]')
+                assert label in node.text_content()
+                assert reason in node.text_content()
+                assert "entry-intraday-v3" in node.text_content()
         browser.close()
+    assert all("intraday" not in i for i in db.latest_report(settings.source)["trade_plan"]["entries"])

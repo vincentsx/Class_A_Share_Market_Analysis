@@ -51,9 +51,26 @@ def time_label(value):
     return str(value or "—")[:19].replace("T", " ")
 
 
+def entry_status(value):
+    return {"paused": "暂缓买入", "waiting": "等待连续确认", "eligible": "确认通过",
+            "cancelled": "当日已取消", "filled": "已模拟买入"}.get(value, "")
+
+
+def exit_initial_rule(policy):
+    if policy.get("version") == "exit-v3":
+        return ("新仓初始保护：ATR缺失，按原失效位和6%线保护" if policy.get("atr_missing") else
+                "新仓初始保护距离1～2ATR，6%保护线优先")
+    if policy.get("version") == "exit-v2":
+        return ("保留原初始保护：ATR缺失，按原失效位和6%线保护" if policy.get("atr_missing") else
+                "保留原初始保护：原失效位、2ATR与6%线取较高者")
+    return ""
+
+
 def template_helpers(environment):
     environment.globals.update(mail_num=number, mail_pct=percent, mail_color=color,
                                mail_link=safe_link, mail_time=time_label,
+                               mail_entry_status=entry_status,
+                               mail_exit_initial_rule=exit_initial_rule,
                                evidence_cards=evidence_cards,
                                evidence_javascript=(Path(__file__).parent / 'static/evidence.js').read_text(),
                                mail_source_status=lambda s: SOURCE_LABELS.get(s, "状态待核对"),

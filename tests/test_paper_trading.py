@@ -17,6 +17,7 @@ from stock_daily.db import (
     signals,
     trading_days,
 )
+from stock_daily.entry_policy import VERSION as ENTRY_VERSION
 from stock_daily.paper_trading import annotate_plan, current_account, execute_quotes
 from stock_daily.trade_plan import build_trade_plan
 from stock_daily.web import create_app
@@ -46,13 +47,14 @@ def setup(db, source="demo", observed=True):
             "market": {"above_ma20_ratio": 80, "benchmark_return20": 5}}
         db.upsert(c, reports, {"source": source, "day": "20261014", "payload": report})
         if observed:
-            # Most account/exit/notification tests begin after one genuine prior observation.
+            # Most account/exit/notification tests begin after one current-policy observation.
             stamp = CURRENT - timedelta(minutes=10)
             before = quotes(stamp)
             for quote in before["quotes"].values():
                 quote.update(volume=900000, amount=900000 * (100.5 if quote["code"] == "000300.SH" else 10.25))
             db.upsert(c, paper_quote_batches, {"source": source, "day": "20261015",
-                "captured_at": stamp.isoformat(), "payload": {"quotes": before["quotes"]}})
+                "captured_at": stamp.isoformat(),
+                "payload": {"version": ENTRY_VERSION, "quotes": before["quotes"]}})
     return report
 
 
