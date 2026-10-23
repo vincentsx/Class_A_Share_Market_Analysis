@@ -88,6 +88,16 @@ realtime_reports = Table(
     Column("captured_at", String(40), nullable=False),
     Column("payload", JSON, nullable=False),
 )
+intraday_candidates = Table(
+    "intraday_candidates", metadata,
+    Column("source", String(20), primary_key=True),
+    Column("day", String(8), primary_key=True),
+    Column("code", String(20), primary_key=True),
+    Column("strategy", String(40), primary_key=True),
+    Column("basis_day", String(8), nullable=False),
+    Column("discovered_at", String(40), nullable=False),
+    Column("payload", JSON, nullable=False),
+)
 news_items = Table(
     "news_items", metadata,
     Column("provider", String(20), primary_key=True),

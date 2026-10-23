@@ -48,12 +48,18 @@ def compose_trade(settings, event):
         if fill.get("exit_slippage_below_low"):
             facts.append(("滑点模拟说明", f"扣滑点后的模拟卖价低于已观察日内最低 {fill['exit_observed_low']:.4f} 元；不代表真实撮合"))
     entry = fill.get("entry_confirmation")
+    if fill.get('signal_origin') == 'intraday':
+        facts += [("候选来源", "盘中新发现"), ("首次发现", fill.get('discovered_at', ''))]
     if entry:
         facts += [("盘中买入规则", entry["version"]), ("买入确认依据", entry["reason"]),
                   ("观察区间", f"{entry['previous_quote_time']} ～ {entry['quote_time']}"),
                   ("当日成交均价", f"{entry['vwap']:.4f} 元"),
                   ("区间新增成交量", f"{entry['interval_volume']:.0f} 股"),
                   ("区间相对沪深300", f"{entry['relative_interval']:+.2f} 个百分点")]
+        if entry.get('max_entry_gap') is not None:
+            facts += [("本次追高上限", f"{entry['max_entry_gap']:.2%}"),
+                      ("本次回落容忍度", f"{entry['max_quote_pullback']:.2%}"),
+                      ("确认方式", "高开回落后重新确认" if entry.get('confirmation_mode') == 'gap_recovery' else "连续量价确认")]
     decision = fill.get('decision_context')
     if decision:
         facts += [('AI/舆情决策', decision.get('reason', '')), ('AI依据截止', decision.get('as_of', '')),

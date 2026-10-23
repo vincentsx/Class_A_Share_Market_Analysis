@@ -27,7 +27,8 @@ def research_input(report, kind):
             'analysis': {k: report.get('analysis', {}).get(k) for k in ('summaries', 'counts', 'notes')}}, ensure_ascii=False)}]
     for item in items[:24]:
         evidence.append({'id': 'news-' + (item.get('id') or hashlib.sha256((item['title'] + item['published_at']).encode()).hexdigest()[:16]), 'title': item['title'], 'text': item['excerpt'],
-            'published_at': item['published_at'], 'sources': item['sources'], 'kind': item['kind']})
+            'published_at': item['published_at'], 'sources': item['sources'], 'kind': item['kind'],
+            **{key: item[key] for key in ('risk_attribution_version', 'stock_risks') if key in item}})
     if daily:
         for card in report.get('evidence', {}).get('items', [])[:20]:
             evidence.append({'id': card['id'], 'title': card['title'], 'text': card.get('summary', ''),

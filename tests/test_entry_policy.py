@@ -124,7 +124,7 @@ def test_intraday_invalidation_pauses_then_requires_two_recovered_observations_a
     assert account['fills'][1:] == confirmed
     buy = account['fills'][0]
     assert buy['side'] == 'buy' and buy['code'] == '600001.SH'
-    assert buy['entry_confirmation']['version'] == VERSION == 'entry-intraday-v3'
+    assert buy['entry_confirmation']['version'] == VERSION == 'entry-intraday-v5'
     assert buy['entry_confirmation']['previous_quote_time'] == first_recovery.isoformat()
     assert buy['entry_confirmation']['quote_time'] == second_recovery.isoformat()
     assert account['summary']['available_cash'] == pytest.approx(
@@ -158,19 +158,21 @@ def test_open_below_or_at_invalidation_can_recover_without_rewriting_open(settin
     assert evaluation(db, settings, at)['status'] == 'filled'
 
 
-def test_open_above_gap_limit_remains_cancelled_after_price_returns(settings, db):
+def test_high_open_waits_for_two_recovered_quotes_without_rewriting_open(settings, db):
     setup(db, observed=False)
-    for minutes in (0, 10, 20):
+    for minutes, price in [(0, 10.7), (10, 10.5), (20, 10.51)]:
         at = CURRENT + timedelta(minutes=minutes)
-        payload = batch(at)
-        payload['quotes']['600001.SH'].update(open=10.6, high=10.8)
-        result = execute_quotes(db, settings, payload, at)
-        assert not any(fill['side'] == 'buy' for fill in current_account(
-            db, settings, '20261014', at)['fills'] if fill['day'] == '20261015')
-        assert evaluation(db, settings, at)['status'] == 'cancelled'
-        assert '追高上限' in evaluation(db, settings, at)['reason']
-        if minutes:
-            assert result['new_fills'] == 0
+        payload = batch(at, price=price)
+        payload['quotes']['600001.SH'].update(open=10.8, high=10.9)
+        execute_quotes(db, settings, payload, at)
+        e = evaluation(db, settings, at)
+        assert e['status'] == ('filled' if minutes == 20 else 'waiting')
+    a = current_account(db, settings, '20261014', at)
+    buy = a['fills'][0]
+    assert buy['side'] == 'buy' and buy['open_price'] == 10.8
+    assert buy['entry_confirmation']['confirmation_mode'] == 'gap_recovery'
+    assert buy['entry_confirmation']['max_entry_gap'] == pytest.approx(.4 / 10.2)
+    assert buy['entry_confirmation']['previous_quote_time'] == (CURRENT + timedelta(minutes=10)).isoformat()
 
 
 def test_stock_sold_today_remains_cancelled_after_recovery(settings, db):
@@ -201,7 +203,6 @@ def test_v1_invalidation_attempt_migrates_once_and_requires_fresh_v3_observation
     record = row['payload']
     key = '20261014|600001.SH|breakout'
     retained = {
-        '20261014|600002.SH|breakout': '开盘涨幅超过追高上限，取消本次入场',
         '20261014|600003.SH|breakout': 'filled',
         '20261014|600004.SH|breakout': '当日已退出，取消重复入场',
         '20261014|600005.SH|breakout': '排除事后发布、时间不明或重建信号',
@@ -224,7 +225,7 @@ def test_v1_invalidation_attempt_migrates_once_and_requires_fresh_v3_observation
     assert db.rows(select(trade_alerts)) == alerts_before
     migration = deepcopy(account['entry_policy']['migration'])
     assert migration == {
-        'from_version': 'entry-intraday-v1', 'to_version': 'entry-intraday-v3',
+        'from_version': 'entry-intraday-v1', 'to_version': VERSION,
         'activated_at': CURRENT.isoformat(), 'released_attempts': [{'key': key, 'reason': old_reason}],
     }
     migrated = db.rows(select(paper_accounts))[0]['payload']
@@ -236,7 +237,7 @@ def test_v1_invalidation_attempt_migrates_once_and_requires_fresh_v3_observation
     account = current_account(restarted, settings, '20261014', later)
     assert account['entry_policy']['migration'] == migration
     assert account['fills'][0]['entry_confirmation']['previous_quote_time'] == CURRENT.isoformat()
-    assert account['fills'][0]['entry_confirmation']['version'] == 'entry-intraday-v3'
+    assert account['fills'][0]['entry_confirmation']['version'] == VERSION
     assert account['fills'][1:] == before['fills']
     assert account['summary']['available_cash'] == pytest.approx(account['summary']['initial_capital']
         + sum(fill['cash_flow'] for fill in account['fills']))
@@ -504,9 +505,9 @@ def test_new_entry_evidence_is_in_both_notification_channels(settings, db):
     fill = current_account(db, settings, '20261014', CURRENT)['fills'][0]
     s = replace(settings, smtp_username='sender@example.com', mail_to='receiver@example.com')
     mail = compose_trade(s, {'id': 'test', 'payload': fill})
-    assert 'entry-intraday-v3' in mail.get_body(preferencelist=('plain',)).get_content()
+    assert VERSION in mail.get_body(preferencelist=('plain',)).get_content()
     assert '区间新增成交量' in mail.get_body(preferencelist=('plain',)).get_content()
-    assert 'entry-intraday-v3' in trade_content(fill)
+    assert VERSION in trade_content(fill)
     assert '区间新增成交' in trade_content(fill)
 
 
@@ -546,3 +547,55 @@ def test_another_dip_resets_the_two_observation_recovery(settings, db):
         account = current_account(db, settings, '20261014', at)
         buys = [f for f in account['fills'] if f['day'] == '20261015' and f['side'] == 'buy']
         assert len(buys) == (1 if minutes == 40 else 0)
+
+
+@pytest.mark.parametrize(('atr', 'pullback', 'gap'), [
+    (None, .002, .03), (float('nan'), .002, .03), (-1, .002, .03),
+    (.1, .002, .03), (.4, .004, .04), (2, .006, .05),
+])
+def test_atr_limits_are_bounded_and_missing_atr_uses_conservative_defaults(atr, pullback, gap):
+    from stock_daily.entry_policy import entry_limits
+
+    limits = entry_limits(10, atr)
+    assert limits['max_quote_pullback'] == pytest.approx(pullback)
+    assert limits['max_entry_gap'] == pytest.approx(gap)
+
+
+def test_atr_pullback_accepts_normal_noise_but_preserves_relative_strength():
+    previous = batch(CURRENT - timedelta(minutes=10))['quotes']
+    current = batch(price=10.3 * .997, benchmark=101 * .997)['quotes']
+    args = (current['600001.SH'], previous['600001.SH'], current['000300.SH'], previous['000300.SH'])
+    assert confirmation(*args, stop=9.5, interval=10)['status'] == 'waiting'
+    result = confirmation(*args, stop=9.5, interval=10, atr=.4)
+    assert result['status'] == 'eligible'
+    assert result['max_quote_pullback'] == pytest.approx(.4 / 10.2 * .1)
+    current['000300.SH']['price'] = 101
+    assert confirmation(*args, stop=9.5, interval=10, atr=.4)['status'] == 'waiting'
+
+
+def test_v3_open_gap_cancellation_is_released_forward_with_fresh_v4_observations(settings, db):
+    setup(db, observed=False)
+    execute_quotes(db, settings, batch(), CURRENT)
+    row = db.rows(select(paper_accounts))[0]
+    key = '20261014|600001.SH|breakout'
+    row['payload']['account']['entry_policy']['version'] = 'entry-intraday-v3'
+    row['payload']['attempts'][key] = '开盘涨幅超过追高上限，取消本次入场'
+    before = deepcopy(row['payload']['account']['fills'])
+    alerts = deepcopy(db.rows(select(trade_alerts)))
+    old = db.rows(select(paper_quote_batches))[0]
+    old['payload']['version'] = 'entry-intraday-v3'
+    with db.engine.begin() as c:
+        db.upsert(c, paper_accounts, row)
+        db.upsert(c, paper_quote_batches, old)
+    for minutes in [10, 20]:
+        at = CURRENT + timedelta(minutes=minutes)
+        execute_quotes(db, settings, batch(at, price=10.3 + minutes / 1000), at)
+        a = current_account(db, settings, '20261014', at)
+        if minutes == 10:
+            assert a['fills'] == before
+            assert db.rows(select(trade_alerts)) == alerts
+        else:
+            assert a['fills'][1:] == before
+            assert a['fills'][0]['entry_confirmation']['version'] == VERSION
+            assert a['summary']['available_cash'] == pytest.approx(a['summary']['initial_capital'] + sum(f['cash_flow'] for f in a['fills']))
+    assert a['entry_policy']['migration']['released_attempts'] == [{'key': key, 'reason': '开盘涨幅超过追高上限，取消本次入场'}]

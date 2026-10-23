@@ -7,7 +7,7 @@ from sqlalchemy import select
 
 from .backtest import position_value
 from .config import SHANGHAI, now
-from .db import bars, sessions, signals, trading_days
+from .db import bars, paper_accounts, sessions, signals, trading_days
 from .operations import state
 from .performance import account_pnl
 from .providers import DataError, make_provider
@@ -74,6 +74,13 @@ def refresh_portfolio(db, settings, feed=None, provider=None, current=None):
             raise DataError("请先初始化日线行情和模拟持仓")
         codes = {r["code"] for r in db.rows(select(signals.c.code).where(
             signals.c.source == settings.source, signals.c.day <= latest[0]["day"]).distinct())}
+        from .candidate_pool import active_candidates
+
+        codes.update(r['code'] for r in active_candidates(db, settings, day, latest[0]['day'], current))
+        accounts = db.rows(select(paper_accounts.c.payload).where(paper_accounts.c.source == settings.source,
+            paper_accounts.c.day <= day).order_by(paper_accounts.c.day.desc()).limit(1))
+        if accounts:
+            codes.update(p['code'] for p in accounts[0]['payload']['account']['positions'])
         quotes, missing = (feed or SinaQuotes(settings)).fetch(codes, day, "portfolio")
         if "000300.SH" not in quotes:
             raise DataError("盘中沪深300报价无法核验，保留上次估值")

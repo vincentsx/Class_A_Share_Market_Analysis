@@ -42,6 +42,7 @@ TOPICS = {
 }
 RISK_WORDS = ("减持", "立案", "诉讼", "处罚", "退市", "预亏", "亏损", "违约", "风险警示", "事故", "制裁")
 UNVERIFIED_WORDS = ("传闻", "网传", "据传", "市场消息", "消息人士", "尚未证实", "未经证实", "澄清", "辟谣", "否认")
+RISK_ATTRIBUTION_VERSION = "stock-risk-v1"
 
 
 def plain(value):
@@ -205,6 +206,71 @@ def mentioned_codes(text, rows, names):
     return codes
 
 
+def risk_subjects(clause, direct, rows):
+    """Bind each keyword to its nearest named subject or explicit subject list."""
+    spans = sorted({(m.start(), m.end(), code) for code in direct
+                    for token in (rows[code]['name'], code[:6])
+                    for m in re.finditer(re.escape(token), clause)})
+    targets = set()
+    for risk in re.finditer('|'.join(map(re.escape, RISK_WORDS + UNVERIFIED_WORDS)), clause):
+        preceding = [s for s in spans if s[1] <= risk.start()]
+        following = [s for s in spans if s[0] >= risk.end()]
+        group = preceding[-1:] if preceding else following[:1]
+        if preceding:
+            for earlier in reversed(preceding[:-1]):
+                gap = clause[earlier[1]:group[0][0]]
+                if not re.fullmatch(r"\s*(?:、|及|和|与|以及|及其)\s*", gap):
+                    break
+                group.insert(0, earlier)
+        targets.update(s[2] for s in group)
+    return targets
+
+
+def stock_risks(title, content, rows, names):
+    """Attribute a clue only to named subjects in that clause, retaining its text.
+
+    Article-wide keywords remain visible, but do not implicate every stock in a
+    roundup. This is a text association, not verification that a risk is true.
+    """
+    text = title + "。" + content.replace("【" + title + "】", "")
+    title_codes = mentioned_codes(title, rows, names)
+    all_codes = mentioned_codes(text, rows, names)
+    single_subject = title_codes if len(title_codes) == 1 and all_codes == title_codes else set()
+    result = []
+    seen = set()
+    for sentence in re.split(r"[。！？!?；;\n]+", text):
+        subjects = set()
+        for clause in re.split(r"[，,]+", sentence):
+            direct = mentioned_codes(clause, rows, names)
+            if direct:
+                subjects = direct
+            words = [word for word in RISK_WORDS + UNVERIFIED_WORDS if word in clause]
+            if not words:
+                continue
+            targets = risk_subjects(clause, direct, rows)
+            # A pronoun/announcement continuation can refer to a single known
+            # subject. Never carry a list of stocks into an unrelated clause.
+            if not targets and re.match(r"\s*(?:该公司|公司|本公司|其|控股股东|股东|预计)", clause):
+                targets = subjects if len(subjects) == 1 else single_subject
+            for code in sorted(targets):
+                key = (code, clause.strip())
+                if key in seen:
+                    continue
+                seen.add(key)
+                result.append({"code": code, "name": rows[code]['name'], "kind": kind_of(clause),
+                               "text": clause.strip()[:300], "risk_words": words})
+    return result
+
+
+def risk_stock_codes(item):
+    """Old frozen snapshots retain their original conservative risk gate."""
+    if item.get('risk_attribution_version') == RISK_ATTRIBUTION_VERSION:
+        clues = item.get('stock_risks')
+        if isinstance(clues, list) and all(isinstance(c, dict) and c.get('code') and c.get('text') for c in clues):
+            return {c['code'] for c in clues}
+    return {s['code'] for s in item.get('mentioned_stocks', [])}
+
+
 def related_industries(topics, industries):
     scopes = [prefix for topic in topics for prefix in TOPICS[topic][1]]
     return [s for s in industries if any(s["name"].startswith(p) or p in s["name"] for p in scopes)]
@@ -288,7 +354,9 @@ def build_news(db, settings, payload, as_of=None):
         if not topics and not codes and not item["important"]:
             continue
         kind = kind_of(text)
+        clues = stock_risks(item['title'], item['content'], rows, names)
         item.update(topics=topics, kind=kind, excerpt=item.pop("content")[:160],
+                    risk_attribution_version=RISK_ATTRIBUTION_VERSION, stock_risks=clues,
                     risk_words=[word for word in RISK_WORDS + UNVERIFIED_WORDS if word in text],
                     related_sectors=[{"name": s["name"], "pct": s["pct"], "up_ratio": s["up_ratio"],
                                       "active": s.get("active", False),

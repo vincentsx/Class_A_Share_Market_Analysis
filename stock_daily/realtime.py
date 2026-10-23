@@ -92,24 +92,34 @@ def quote_valid(quote, day, captured):
 def indicators(db, settings, basis, rows):
     dates = [r['day'] for r in db.rows(select(trading_days.c.day).where(
         trading_days.c.source == settings.source, trading_days.c.is_open == 1,
-        trading_days.c.day <= basis).order_by(trading_days.c.day.desc()).limit(20))]
+        trading_days.c.day <= basis).order_by(trading_days.c.day.desc()).limit(65))]
     histories = defaultdict(list)
     if dates:
-        for row in db.rows(select(bars.c.code, bars.c.day, bars.c.close, bars.c.high, bars.c.volume, bars.c.adj)
+        for row in db.rows(select(bars.c.code, bars.c.day, bars.c.close, bars.c.high, bars.c.low, bars.c.volume, bars.c.adj)
                 .where(bars.c.source == settings.source, bars.c.day.in_(dates))):
             histories[row['code']].append(row)
     for row in rows:
         row.update(ma20=None, distance_ma20=None, prior_high20=None, cumulative_daily_volume_ratio=None,
-            vwap=None, tags=[])
+            ma60=None, atr14=None, base_adj=None, history_complete=False, vwap=None, tags=[])
         average = row['amount'] / row['volume']
         if row['low'] - .0051 <= average <= row['high'] + .0051:
             row['vwap'] = average
         prior = sorted(histories[row['code']], key=lambda r: r['day'], reverse=True)
-        if (len(dates) == len(prior) == 20 and len({r['adj'] for r in prior}) == 1
-                and all(r['volume'] > 0 for r in prior)
+        recent = prior[:20]
+        if (len(dates) >= 20 and len(recent) == 20 and [r['day'] for r in recent] == dates[:20]
+                and len({r['adj'] for r in recent}) == 1 and all(r['volume'] > 0 for r in recent)
                 and math.isclose(row['previous'], prior[0]['close'], abs_tol=.0051, rel_tol=0)):
-            row.update(ma20=mean(r['close'] for r in prior), prior_high20=max(r['high'] for r in prior),
-                cumulative_daily_volume_ratio=row['volume'] / mean(r['volume'] for r in prior))
+            row.update(ma20=mean(r['close'] for r in recent), prior_high20=max(r['high'] for r in recent),
+                cumulative_daily_volume_ratio=row['volume'] / mean(r['volume'] for r in recent))
+            if len(prior) == len(dates) == 65 and [r['day'] for r in prior] == dates:
+                base = prior[0]['adj']
+                ordered = list(reversed(prior))
+                ranges = [max(b['high'] * b['adj'] - b['low'] * b['adj'],
+                    abs(b['high'] * b['adj'] - a['close'] * a['adj']),
+                    abs(b['low'] * b['adj'] - a['close'] * a['adj']))
+                    for a, b in zip(ordered[-15:-1], ordered[-14:])]
+                row.update(ma60=mean(r['close'] * r['adj'] / base for r in prior[:60]),
+                    atr14=mean(ranges) / base, base_adj=base, history_complete=True)
             row['distance_ma20'] = (row['price'] / row['ma20'] - 1) * 100
             if row['price'] > row['prior_high20']:
                 row['tags'].append('高于前20日高点')
@@ -187,10 +197,16 @@ def build(db, settings, day, window, quotes, stocks, basis, captured):
     for item in items[:24]:
         evidence.append({'id': 'news-' + item['id'], 'title': item['title'],
             'text': item['excerpt'], 'kind': item['kind'], 'sources': item['sources'],
-            'published_at': item['published_at']})
+            'published_at': item['published_at'],
+            **{key: item[key] for key in ('risk_attribution_version', 'stock_risks') if key in item}})
     report['evidence'] = evidence
+    from .candidate_pool import METHOD as CANDIDATE_METHOD
+    from .candidate_pool import VERSION as CANDIDATE_VERSION
+    from .candidate_pool import discover
     from .decision_ai import attach_universe
 
+    report.update(candidate_pool_version=CANDIDATE_VERSION, candidate_pool_method=CANDIDATE_METHOD,
+                  intraday_candidates=discover(db, settings, report, rows, stocks))
     attach_universe(db, settings, report, quotes)
     report['ai'] = {'status': 'pending', 'message': '本次行情和新闻已保存，AI分析生成中'}
     return report
@@ -240,6 +256,9 @@ def run(db, settings, feed=None, news_feed=None, analyzer=None, current=None, on
                 report = build(db, settings, day, window, quotes, stocks, metadata['day'], captured)
                 report['missing_count'] = len(stocks) - report['market']['count']
                 with db.engine.begin() as c:
+                    from .candidate_pool import persist
+
+                    persist(c, db, report)
                     db.upsert(c, realtime_reports, {'source': settings.source, 'day': day, 'window': window,
                         'captured_at': report['captured_at'], 'payload': report})
             if on_saved:

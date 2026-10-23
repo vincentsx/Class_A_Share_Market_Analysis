@@ -8,11 +8,12 @@ from datetime import datetime, timedelta
 from sqlalchemy import select
 
 from .backtest import board, effective_config, fees, position_value, simulate, simulation_profile
+from .candidate_pool import active_candidates
 from .config import SHANGHAI, now
 from .db import bars, paper_accounts, paper_quote_batches, reports, sessions, signals, trading_days
 from .decision_ai import assessment, configured_policy, decision_context, latest_analysis
-from .entry_policy import LEGACY_INVALIDATION_CANCELLATIONS, confirmation, rank_key
 from .entry_policy import METHOD as ENTRY_METHOD
+from .entry_policy import MIGRATABLE_CANCELLATIONS, confirmation, entry_limits, rank_key
 from .entry_policy import VERSION as ENTRY_VERSION
 from .execution import entry_guard, entry_size, industry_of, market_gate
 from .exit_policy import POLICY, advance, context, initial_protection
@@ -159,6 +160,18 @@ def _quote_error(quote, previous, day, current):
     return None
 
 
+def qtime_after_discovery(quote, item):
+    try:
+        discovered = item['discovery_quote']
+        return bool(quote and datetime.fromisoformat(quote['quote_time'])
+                    >= datetime.fromisoformat(item['discovered_quote_time'])
+                    and quote['volume'] >= discovered['volume'] and quote.get('amount', 0) >= discovered['amount']
+                    and math.isclose(quote['open'], discovered['open'], abs_tol=.0051, rel_tol=0)
+                    and math.isclose(quote['previous'], discovered['previous'], abs_tol=.0051, rel_tol=0))
+    except (ValueError, TypeError, KeyError):
+        return False
+
+
 def execute_quotes(db, settings, payload, current=None):
     """Only the quote worker writes. A lock and persisted order keys prevent duplicates."""
     current = (current or now()).astimezone(SHANGHAI)
@@ -210,7 +223,7 @@ def execute_quotes(db, settings, payload, current=None):
         if entry_policy.get("version") != ENTRY_VERSION:
             activated_at = current.isoformat()
             released = [{"key": key, "reason": reason} for key, reason in record["attempts"].items()
-                        if reason in LEGACY_INVALIDATION_CANCELLATIONS]
+                        if reason in MIGRATABLE_CANCELLATIONS]
             for attempt in released:
                 del record["attempts"][attempt["key"]]
             if entry_policy.get("version") or released:
@@ -289,25 +302,38 @@ def execute_quotes(db, settings, payload, current=None):
                 sequence=len(account["fills"]) + 1, cash_after=cash))
             del positions[code]
         candidates = db.rows(select(signals).where(signals.c.source == settings.source, signals.c.day == basis))
+        candidates += active_candidates(db, settings, day, basis, current)
         evaluations = {}
         for signal in candidates:
             code, item = signal["code"], signal["payload"]
-            key = f"{basis}|{code}|{signal['strategy']}"
+            key = f"{signal['day']}|{code}|{signal['strategy']}"
             base = {"code": code, "strategy": signal["strategy"], "evaluated_at": current.isoformat(),
-                    "version": ENTRY_VERSION}
+                    "version": ENTRY_VERSION, "signal_day": signal['day'],
+                    "origin": item.get('origin', 'daily'), "name": item['name'],
+                    "discovered_at": item.get('published_at') if item.get('origin') == 'intraday' else None}
             attempt = record["attempts"].get(key)
             if attempt:
                 evaluations[key] = {**base, "status": "filled" if attempt == "filled" else "cancelled",
                     "reason": "已确认模拟买入" if attempt == "filled" else attempt}
                 continue
             stop, previous = item.get("invalidation_adj"), prior.get(code)
-            if (code not in valid_quotes or not previous or not isinstance(stop, (int, float))
+            if item.get('origin') == 'intraday' and not qtime_after_discovery(quotes.get(code), item):
+                evaluation = {'status': 'waiting', 'reason': '等待首次发现后的有效报价；报价时间、量额或价格尺度待核验'}
+            elif (code not in valid_quotes or not previous or not isinstance(stop, (int, float))
                     or not math.isfinite(stop) or stop <= 0):
                 evaluation = {"status": "waiting", "reason": "报价或信号失效位置待核验"}
             else:
-                evaluation = confirmation(valid_quotes[code], previous_quotes.get(code),
+                prior_quote = previous_quotes.get(code)
+                if item.get('origin') == 'intraday' and (not previous_batches
+                        or datetime.fromisoformat(previous_batches[0]['captured_at'])
+                            < datetime.fromisoformat(signal['discovered_at'])
+                        or prior_quote and datetime.fromisoformat(prior_quote['quote_time'])
+                            < datetime.fromisoformat(item['discovered_quote_time'])):
+                    prior_quote = None
+                evaluation = confirmation(valid_quotes[code], prior_quote,
                     valid_quotes.get("000300.SH"), previous_quotes.get("000300.SH"),
-                    stop=stop / previous["adj"], interval=settings.portfolio_interval_minutes)
+                    stop=stop / previous["adj"], interval=settings.portfolio_interval_minutes,
+                    atr=item.get('atr14'), base_gap=config.max_entry_gap)
             evaluations[key] = {**base, **evaluation}
             if evaluation["status"] == "cancelled":
                 record["attempts"][key] = evaluation["reason"]
@@ -322,27 +348,34 @@ def execute_quotes(db, settings, payload, current=None):
             if config.drawdown_pause and equity / peak - 1 <= -config.drawdown_pause:
                 account["execution_state"]["entry_paused"] = True
         for signal in candidates:
-            key = f"{basis}|{signal['code']}|{signal['strategy']}"
+            key = f"{signal['day']}|{signal['code']}|{signal['strategy']}"
             opinion = assessment(ai_context, signal['code'], valid_quotes.get(signal['code']))
             if ai_context['enabled']:
                 evaluations[key]['decision_context'] = opinion
                 if evaluations[key]['status'] == 'eligible' and not opinion['buy_allowed']:
                     evaluations[key].update(status='waiting', reason='AI/舆情等待：' + opinion['reason'])
         ordered = sorted(candidates, key=lambda s: (
-            evaluations[f"{basis}|{s['code']}|{s['strategy']}"]['status'] != 'eligible',
+            evaluations[f"{s['day']}|{s['code']}|{s['strategy']}"]['status'] != 'eligible',
             -assessment(ai_context, s['code'])['score'], *rank_key(s, evaluations)))
         for rank, signal in enumerate(ordered, 1):
-            evaluations[f"{basis}|{signal['code']}|{signal['strategy']}"]["decision_rank"] = rank
+            evaluations[f"{signal['day']}|{signal['code']}|{signal['strategy']}"]["decision_rank"] = rank
         for signal in ordered if not errors else []:
             code, item = signal["code"], signal["payload"]
-            key = f"{basis}|{code}|{signal['strategy']}"
+            key = f"{signal['day']}|{code}|{signal['strategy']}"
             if key in record["attempts"]:
+                continue
+            if item.get('origin') == 'intraday' and not qtime_after_discovery(quotes.get(code), item):
+                decisions[code] = evaluations[key]['reason']
                 continue
             try:
                 stamp = datetime.fromisoformat(item.get("published_at") or report.get("generated_at"))
                 timely = stamp.tzinfo is not None and basis <= stamp.astimezone(SHANGHAI).strftime("%Y%m%d") <= day
-                timely = timely and stamp < current.replace(hour=9, minute=30, second=0, microsecond=0)
-            except (ValueError, TypeError):
+                if item.get('origin') == 'intraday':
+                    timely = timely and signal['day'] == day and stamp <= current
+                    timely = timely and item.get('basis_day') == basis
+                else:
+                    timely = timely and stamp < current.replace(hour=9, minute=30, second=0, microsecond=0)
+            except (ValueError, TypeError, KeyError):
                 timely = False
             if not timely or item.get("reconstructed"):
                 record["attempts"][key] = "排除事后发布、时间不明或重建信号"
@@ -363,14 +396,14 @@ def execute_quotes(db, settings, payload, current=None):
             if error:
                 decisions[code] = error
                 continue
-            # The fixed opening gap still cancels entry. A dip below the daily reference
-            # price is handled by live confirmation instead of locking out the whole day.
-            gate = market_gate(report, config) or entry_guard(
-                replace(config, require_valid_entry=False), q["open"], previous, item)
+            # A high opening is observed, not a permanent cancellation. Two new
+            # in-range quotes must confirm recovery before an entry is eligible.
+            gate = market_gate(report, config)
             if gate:
                 record["attempts"][key] = gate
                 continue
-            gate = entry_guard(config, q["price"], previous, item)
+            limits = entry_limits(previous['close'], item.get('atr14'), config.max_entry_gap)
+            gate = entry_guard(replace(config, max_entry_gap=limits['max_entry_gap']), q["price"], previous, item)
             if account["execution_state"].get("entry_paused"):
                 evaluations[key]["status"] = "waiting"
                 decisions[code] = "组合回撤暂停新增仓位"
@@ -415,7 +448,9 @@ def execute_quotes(db, settings, payload, current=None):
                 "entry_confirmed_at": current.isoformat(), "entry_basis": "quote",
                 "published_at": stamp.isoformat(), "label": item.get("label", signal["strategy"]),
                 "rule_version": item.get("rule_version", ""), "entry_reasons": item.get("reasons", []),
-                "entry_risk": sizing, "industry": industry, "signal_day": basis,
+                "entry_risk": sizing, "industry": industry, "signal_day": signal['day'],
+                "signal_origin": item.get('origin', 'daily'),
+                "discovered_at": item.get('published_at') if item.get('origin') == 'intraday' else None,
                 "entry_confirmation": deepcopy(evaluations[key]),
                 "entry_decision": {**assessment(ai_context, code, q), "applied": True} if ai_context["enabled"] else None,
                 "invalidation_price": item["invalidation_adj"] / previous["adj"],
@@ -437,7 +472,7 @@ def execute_quotes(db, settings, payload, current=None):
         account["entry_policy"] = {"version": ENTRY_VERSION, "method": ENTRY_METHOD,
             "activated_at": activated_at,
             "evaluated_at": current.isoformat(), "basis_day": basis,
-            "candidates": [evaluations[f"{basis}|{s['code']}|{s['strategy']}"] for s in ordered]}
+            "candidates": [evaluations[f"{s['day']}|{s['code']}|{s['strategy']}"] for s in ordered]}
         if migration:
             account["entry_policy"]["migration"] = migration
         account["positions"] = list(positions.values())

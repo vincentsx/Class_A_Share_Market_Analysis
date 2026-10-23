@@ -8,10 +8,11 @@ from sqlalchemy import select
 
 from .db import paper_accounts, realtime_reports, signals
 from .entry_policy import vwap
+from .news import risk_stock_codes
 
 VERSION = 'evidence-decision-v1'
 METHOD = ('仅使用决策前已生成、同日同交易时段且未过期的AI与新闻证据；'
-          'AI支持且评分≥60才允许新增买入，等待/退出意见或直接风险报道暂停买入；'
+          'AI支持且评分≥60才允许新增买入，等待/退出意见或直接归属于该股的风险片段暂停买入；'
           '市场减仓意见将单笔权重与风险预算减半，暂停意见停止新增。'
           'AI退出评分≥70且当前价格弱于开盘或成交均价时触发退出，仍遵守T+1及成交约束。'
           '既有止损、移动保护、资金及仓位上限始终优先；AI不可用时暂停新增、继续风控退出。')
@@ -28,10 +29,23 @@ def attach_universe(db, settings, report, quotes):
     positions = accounts[0]['payload']['account'].get('positions', []) if accounts else []
     stocks = {p['code']: {'code': p['code'], 'name': p['name'], 'role': 'holding',
         'shares': p['shares'], 'entry_price': p['entry_price']} for p in positions}
-    for row in candidates[:40]:
+    intraday = report.get('intraday_candidates', [])
+    # Each pool has reserved model capacity, with remaining slots shared.
+    selected = candidates[:20] + intraday[:20]
+    seen = {r['code'] for r in selected}
+    for row in candidates[20:] + intraday[20:]:
+        if len(seen) >= 40:
+            break
+        if row['code'] not in seen:
+            selected.append(row)
+            seen.add(row['code'])
+    for row in selected:
         code, item = row['code'], row['payload']
         stocks.setdefault(code, {'code': code, 'name': item['name'], 'role': 'candidate'})
-        stocks[code]['signal'] = {key: item.get(key) for key in ('reasons', 'risks', 'relative20', 'invalidation_adj')}
+        signal = {key: item.get(key) for key in ('reasons', 'risks', 'relative20', 'invalidation_adj',
+            'origin', 'rule_version', 'basis_day', 'published_at', 'discovery_price')}
+        stocks[code].setdefault('signals', []).append(signal)
+        stocks[code].setdefault('signal', signal)
     report['decision_universe'] = sorted(stocks)
     for code, item in stocks.items():
         item['quote'] = quotes.get(code)
@@ -42,7 +56,8 @@ def attach_universe(db, settings, report, quotes):
         identifier = 'news-' + item['id']
         if identifier not in included and any(s['code'] in stocks for s in item.get('mentioned_stocks', [])):
             report['evidence'].append({'id': identifier, 'title': item['title'], 'text': item['excerpt'],
-                'kind': item['kind'], 'sources': item['sources'], 'published_at': item['published_at']})
+                'kind': item['kind'], 'sources': item['sources'], 'published_at': item['published_at'],
+                **{key: deepcopy(item[key]) for key in ('risk_attribution_version', 'stock_risks') if key in item}})
             included.add(identifier)
             if len(included) >= 100:
                 break
@@ -127,8 +142,10 @@ def decision_context(db, settings, current):
     risks = {}
     for item in report['news']['items']:
         if item['kind'] in {'风险事项待核对', '传闻/澄清待核对'} and not item.get('after_quote'):
-            for stock in item.get('mentioned_stocks', []):
-                risks.setdefault(stock['code'], []).append(item['title'])
+            for code in risk_stock_codes(item):
+                clues = [c['text'] for c in item.get('stock_risks') or []
+                         if isinstance(c, dict) and c.get('code') == code and c.get('text')]
+                risks.setdefault(code, []).extend(clues or [item['title']])
     return {**result, 'status': 'available', 'message': '本次已将AI、新闻与量价意见纳入模拟决策。',
         'window': report['window'], 'as_of': report['captured_at'], 'generated_at': ai['generated_at'],
         'model': ai.get('model'), 'market_action': policy['market_action'], 'market_reason': policy['text'],

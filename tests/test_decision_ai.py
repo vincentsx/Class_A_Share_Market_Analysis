@@ -195,3 +195,35 @@ def test_ai_score_changes_candidate_order_with_existing_quote_confirmation(db, s
     assert a['entry_policy']['candidates'][0]['code'] == '600002.SH'
     bought = sorted((f for f in a['fills'] if f['side'] == 'buy' and f['day'] == '20261015'), key=lambda f:f['sequence'])
     assert bought[0]['code'] == '600002.SH'
+
+
+@pytest.mark.parametrize('direct_risk', [False, True])
+def test_attributed_risk_blocks_only_its_subject_without_overriding_ai_or_quote_rules(db, settings, direct_risk):
+    setup(db)
+    config = replace(settings, ai_trading_enabled=True)
+    r, save = save_analysis(db, config)
+    code = '600001.SH' if direct_risk else '600000.SH'
+    r['news']['items'] = [{'kind': '风险事项待核对', 'title': '两股综述',
+        'mentioned_stocks': [{'code': '600000.SH'}, {'code': '600001.SH'}], 'after_quote': False,
+        'risk_attribution_version': 'stock-risk-v1',
+        'stock_risks': [{'code': code, 'text': code + '被立案调查'}]}]
+    save()
+    execute_quotes(db, config, quotes(), CURRENT)
+    a = account(db, config)
+    assert bool(a['positions']) is not direct_risk
+    assert set(a['decision_context']['news_risks']) == {code}
+    assert any(f['side'] == 'sell' and f['day'] == CURRENT.strftime('%Y%m%d') for f in a['fills'])
+    assert execute_quotes(db, config, quotes(), CURRENT)['status'] == 'unchanged'
+
+
+def test_risk_roundup_without_direct_subject_does_not_cancel_valid_ai_support(db, settings):
+    setup(db)
+    config = replace(settings, ai_trading_enabled=True)
+    r, save = save_analysis(db, config)
+    r['news']['items'] = [{'kind': '风险事项待核对', 'title': '统计不含退市股',
+        'mentioned_stocks': [{'code': '600001.SH'}], 'after_quote': False,
+        'risk_attribution_version': 'stock-risk-v1', 'stock_risks': []}]
+    save()
+    execute_quotes(db, config, quotes(), CURRENT)
+    assert account(db, config)['positions'][0]['code'] == '600001.SH'
+    assert account(db, config)['decision_context']['news_risks'] == {}

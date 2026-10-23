@@ -119,11 +119,17 @@ def trade_content(fill):
         lines.append(f"该轮扣费已实现盈亏：{fill['realized_profit']:+.2f} 元")
         if fill.get("exit_slippage_below_low"):
             lines.append(f"滑点模拟：卖价低于已观察日内最低 {fill['exit_observed_low']:.4f} 元，不代表真实撮合")
+    if fill.get('signal_origin') == 'intraday':
+        lines.append(f"候选来源：盘中新发现 · 首次发现 {clean(fill.get('discovered_at'))}")
     if fill.get("entry_confirmation"):
         e = fill["entry_confirmation"]
         lines += [f"盘中买入确认：{e['version']} · {clean(e['reason'])}",
             f"当日成交均价：{e['vwap']:.4f} 元 · 区间新增成交 {e['interval_volume']:.0f} 股",
             f"区间相对沪深300：{e['relative_interval']:+.2f} 个百分点"]
+        if e.get('max_entry_gap') is not None:
+            lines.append(f"本次追高上限：{e['max_entry_gap']:.2%} · 回落容忍度：{e['max_quote_pullback']:.2%}")
+            if e.get('confirmation_mode') == 'gap_recovery':
+                lines.append("确认方式：高开回落后重新确认")
     if fill.get('decision_context'):
         d = fill['decision_context']
         lines += [f"AI/舆情依据：{clean(d.get('reason'))}", f"AI依据截止：{clean(d.get('as_of'))}"]

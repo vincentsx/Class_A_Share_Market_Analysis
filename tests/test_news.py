@@ -12,9 +12,12 @@ from stock_daily.news import (
     PublicNewsFeed,
     build_news,
     collect_news,
+    name_index,
     normalize,
     refresh_snapshot_news,
+    risk_stock_codes,
     safe_url,
+    stock_risks,
     topic_matches,
 )
 from stock_daily.providers import DataError
@@ -222,3 +225,35 @@ def test_event_news_precedes_price_commentary_and_search_set_keeps_risk_items(db
     assert len(news['items']) == 32
     assert any(item['risk_words'] for item in news['items'])
     assert next(r for r in news['items'] if '涨超' in r['title'])['kind'] == '行情报道'
+
+
+@pytest.mark.parametrize(('title', 'content', 'expected'), [
+    ('涨停分析', '软件股份涨停，浦发银行上涨。统计不含ST股、退市股。', set()),
+    ('软件股份涨停', '软件股份上涨，浦发银行因违规被立案调查。', {'600000.SH'}),
+    ('软件股份公告', '公司预计全年亏损。', {'000001.SZ'}),
+    ('行业综述', '软件股份公告，公司股东拟减持；浦发银行上涨。', {'000001.SZ'}),
+    ('软件股份、浦发银行公告', '软件股份、浦发银行均预计亏损。', {'000001.SZ', '600000.SH'}),
+    ('软件股份上涨', '软件股份上涨。行业面临制裁风险。', set()),
+    ('软件股份澄清', '软件股份否认市场传闻。', {'000001.SZ'}),
+    ('个股公告', '600000公告涉及诉讼，软件股份发布新品。', {'600000.SH'}),
+    ('行情综述', '软件股份涨停、浦发银行被立案调查。', {'600000.SH'}),
+])
+def test_risk_clues_are_attributed_to_local_subjects_not_all_article_mentions(title, content, expected):
+    rows = {q['code']: q for q in report()['quotes']}
+    clues = stock_risks(title, content, rows, name_index(report()['quotes']))
+    assert {c['code'] for c in clues} == expected
+    assert all(c['text'] and c['risk_words'] for c in clues)
+
+
+def test_attribution_is_frozen_with_news_and_legacy_snapshots_keep_conservative_gate(db, news_settings):
+    title = '行情综述'
+    content = '软件股份上涨，浦发银行被立案调查。统计不含退市股。'
+    collect_news(db, news_settings, feed=Feed([raw(title, content=content)]), captured=NOON)
+    item = build_news(db, news_settings, report())['items'][0]
+    assert {s['code'] for s in item['mentioned_stocks']} == {'000001.SZ', '600000.SH'}
+    assert risk_stock_codes(item) == {'600000.SH'}
+    assert '浦发银行被立案调查' in item['stock_risks'][0]['text']
+    legacy = {k: v for k, v in item.items() if k not in {'stock_risks', 'risk_attribution_version'}}
+    assert risk_stock_codes(legacy) == {'000001.SZ', '600000.SH'}
+    item['stock_risks'] = None
+    assert risk_stock_codes(item) == {'000001.SZ', '600000.SH'}

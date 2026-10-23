@@ -27,6 +27,8 @@ def make_fill(position, source, side, *, sequence=None, cash_after=None):
             "confirmed_at": position.get(f"{prefix}_confirmed_at"),
             "period": "盘中报价模拟" if position.get(f"{prefix}_basis") == "quote" else "开盘模拟",
             "signal_day": position.get("signal_day"), "published_at": position.get("published_at"),
+            **({"signal_origin": position['signal_origin'], "discovered_at": position.get('discovered_at')}
+               if position.get('signal_origin') == 'intraday' else {}),
             "entry_day": position["entry_day"], "entry_price": position.get("entry_price"),
             "entry_fee": position.get("entry_fee"), "invalidation_price": position.get("invalidation_price"),
             "entry_reasons": position.get("entry_reasons", []), "entry_risk": position.get("entry_risk"),
