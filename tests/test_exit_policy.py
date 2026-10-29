@@ -1,14 +1,21 @@
 from copy import deepcopy
-from datetime import timedelta
+from datetime import date, timedelta
 
 import pytest
 from sqlalchemy import select, update
-from test_paper_trading import CURRENT, quotes, setup
+from test_paper_trading import CURRENT, close_day, quotes, setup
 
 from stock_daily.backtest import fees, simulation_profile
-from stock_daily.db import Database, bars, paper_accounts, trading_days
-from stock_daily.exit_policy import POLICY, advance, break_even, context, initial_protection
-from stock_daily.paper_trading import annotate_plan, current_account, execute_quotes
+from stock_daily.db import Database, bars, paper_accounts, sessions, trade_alerts, trading_days
+from stock_daily.exit_policy import (
+    POLICY,
+    TREND_EXIT_REASON,
+    advance,
+    break_even,
+    context,
+    initial_protection,
+)
+from stock_daily.paper_trading import annotate_plan, current_account, execute_quotes, reconcile
 from stock_daily.trade_plan import build_trade_plan
 
 
@@ -200,7 +207,8 @@ def test_trend_context_uses_only_complete_prior_sessions_not_future_bars(setting
             db.upsert(c, bars, {"source": "demo", "code": "600000.SH", "day": day,
                 "open": 10, "high": 11, "low": 8, "close": 9 if offset >= 19 else 10,
                 "volume": 1e7, "amount": 1e8, "adj": 1, "pct": 0})
-    p = {**position(), "signal_day": "20261013", "strategy": "breakout"}
+    p = {**position(), "signal_day": "20261013", "strategy": "breakout",
+         "entry_day": (base + timedelta(days=19)).strftime("%Y%m%d")}
     cutoff = (base + timedelta(days=20)).strftime("%Y%m%d")
     prior = context(db, "demo", p, cutoff)
     assert prior["trend_exit"]
@@ -212,3 +220,130 @@ def test_trend_context_uses_only_complete_prior_sessions_not_future_bars(setting
     with db.engine.begin() as c:
         c.execute(bars.delete().where(bars.c.day == cutoff))
     assert not context(db, "demo", p, cutoff)["trend_exit"]
+
+
+def seed_trend_history(db, code="600000.SH", end=date(2026, 10, 19), count=22):
+    dates = []
+    while len(dates) < count:
+        if end.weekday() < 5:
+            dates.append(end.strftime("%Y%m%d"))
+        end -= timedelta(days=1)
+    dates.reverse()
+    with db.engine.begin() as c:
+        for index, day in enumerate(dates):
+            db.upsert(c, trading_days, {"source": "demo", "day": day, "is_open": 1})
+            db.upsert(c, bars, {"source": "demo", "code": code, "day": day,
+                "open": 10.2, "high": 12, "low": 9, "close": 10.2 if index >= count - 3 else 11,
+                "volume": 1e7, "amount": 1e8, "adj": 1, "pct": 0})
+    return dates
+
+
+@pytest.mark.parametrize("entry_day,expected", [
+    ("20261014", True), ("20261015", True), ("20261016", False), ("20261019", False), (None, False),
+])
+def test_trend_exit_requires_two_completed_closes_during_holding(db, entry_day, expected):
+    seed_trend_history(db)
+    p = {**position(), "entry_day": entry_day, "signal_day": "20261014", "strategy": "intraday_reclaim"}
+    prior = context(db, "demo", p, "20261016")
+    assert prior["trend_exit"] is expected
+    assert prior["ma20"] > prior["close"]  # pre-entry history still supplies the moving average
+    advance(p, tick(10.5), prior, simulation_profile())
+    assert bool(p["exit_due"]) is expected
+
+
+def test_entry_close_then_next_session_close_can_trigger_across_weekend(db):
+    seed_trend_history(db)
+    p = {**position(), "entry_day": "20261016", "signal_day": "20261015", "strategy": "intraday_reclaim"}
+    assert not context(db, "demo", p, "20261016")["trend_exit"]
+    prior = context(db, "demo", p, "20261019")
+    assert prior["trend_exit"]
+    advance(p, tick(10.5), prior, simulation_profile())
+    assert p["exit_trigger_day"] == "20261019" and p["exit_due"] == TREND_EXIT_REASON
+
+
+@pytest.mark.parametrize("price,expected_reason", [(10.3, None), (9.6, "盘中风险止损触发")])
+def test_stored_pre_entry_trend_exit_is_corrected_once_without_rewriting_fills(settings, db, price, expected_reason):
+    setup(db)
+    seed_trend_history(db, "600001.SH", date(2026, 10, 14), count=21)
+    execute_quotes(db, settings, quotes(), CURRENT)
+    later = CURRENT + timedelta(minutes=10)
+    execute_quotes(db, settings, quotes(later), later)
+    saved = db.rows(select(paper_accounts))[0]
+    account = saved["payload"]["account"]
+    p = account["positions"][0]
+    assert p["entry_day"] == "20261015" and p["exit_due"] is None
+    p.update(exit_due=TREND_EXIT_REASON, exit_trigger_day="20261014", exit_trigger_kind="daily",
+        exit_trigger_close=10.2, exit_decision={"reason": "旧错误退出依据"},
+        exit_delays=[{"day": "20261015", "reason": "T+1"}])
+    original = deepcopy(account)
+    alerts = deepcopy(db.rows(select(trade_alerts)))
+    with db.engine.begin() as c:
+        db.upsert(c, paper_accounts, saved)
+    restarted = Database(settings.database_url)
+    try:
+        later += timedelta(minutes=10)
+        payload = quotes(later)
+        payload["quotes"]["600001.SH"].update(price=price, low=min(price, 9.8))
+        assert execute_quotes(restarted, settings, payload, later)["new_fills"] == 0
+        a = current_account(restarted, settings, "20261014", later)
+        p = a["positions"][0]
+        assert p["exit_due"] == expected_reason
+        correction = p["exit_corrections"]
+        assert len(correction) == 1
+        assert correction[0]["previous"]["exit_trigger_day"] == "20261014"
+        assert correction[0]["previous"]["exit_decision"] == {"reason": "旧错误退出依据"}
+        assert p["exit_policy"]["stop"] == original["positions"][0]["exit_policy"]["stop"]
+        assert "exit_decision" not in p and p["exit_delays"] == []
+        assert a["fills"] == original["fills"] and a["trades"] == original["trades"]
+        assert a["summary"]["available_cash"] == original["summary"]["available_cash"]
+        assert db.rows(select(trade_alerts)) == alerts
+        if expected_reason:
+            assert p["exit_trigger_kind"] == "quote" and p["exit_trigger_day"] == "20261015"
+            assert "T+1" in a["paper_trading"]["decisions"][p["code"]]
+        later += timedelta(minutes=10)
+        execute_quotes(restarted, settings, quotes(later), later)
+        p = current_account(restarted, settings, "20261014", later)["positions"][0]
+        assert p["exit_due"] == expected_reason and p["exit_corrections"] == correction
+        assert db.rows(select(trade_alerts)) == alerts
+    finally:
+        restarted.engine.dispose()
+
+
+@pytest.mark.parametrize("trigger_day,reason,kind,corrected", [
+    ("20261014", TREND_EXIT_REASON, "daily", True),
+    ("20261015", TREND_EXIT_REASON, "daily", True),
+    ("20261016", TREND_EXIT_REASON, "daily", False),
+    ("20261014", "盘中风险止损触发", "quote", False),
+    ("20261014", "持有期届满，下一有效盘中报价退出", "daily", False),
+])
+def test_only_impossible_pending_trend_trigger_is_released(trigger_day, reason, kind, corrected):
+    p = {**position(), "entry_day": "20261015", "exit_due": reason,
+         "exit_trigger_day": trigger_day, "exit_trigger_kind": kind}
+    advance(p, tick(10.5), {"atr": .2, "basis_day": "20261014"}, simulation_profile())
+    assert (p["exit_due"] is None) is corrected
+    if not corrected:
+        assert p["exit_due"] == reason and p["exit_trigger_day"] == trigger_day
+
+
+def test_close_reconciliation_corrects_old_trigger_and_dates_new_stop_to_close(settings, db):
+    setup(db)
+    seed_trend_history(db, "600001.SH", date(2026, 10, 14), count=21)
+    execute_quotes(db, settings, quotes(), CURRENT)
+    stored = db.rows(select(paper_accounts))[0]["payload"]["account"]
+    p = stored["positions"][0]
+    p.update(exit_due=TREND_EXIT_REASON, exit_trigger_day="20261014", exit_trigger_kind="daily",
+        exit_trigger_close=10.2)
+    before = deepcopy(stored)
+    close_day(db, price=9.6)
+    with db.engine.begin() as c:
+        c.execute(update(sessions).where(sessions.c.day == "20261015")
+                  .values(acquired_at="2026-10-16T01:00:00+08:00"))
+    a = reconcile(db, settings, stored, "20261015")
+    assert stored == before  # a view never edits the persisted original
+    p = a["positions"][0]
+    assert p["exit_due"] == "盘中风险止损触发"
+    assert p["exit_trigger_day"] == "20261015" and p["exit_trigger_kind"] == "daily"
+    assert p["exit_trigger_close"] == 9.6 and "exit_trigger_time" not in p
+    assert len(p["exit_corrections"]) == 1
+    assert a["fills"] == before["fills"] and a["trades"] == before["trades"]
+    assert a["summary"]["available_cash"] == before["summary"]["available_cash"]

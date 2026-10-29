@@ -80,10 +80,11 @@ def reconcile(db, settings, stored, cutoff):
                 p.pop("quote_error", None)
             p["held_sessions"] += 1
             if row and p.get("exit_policy"):
-                had_exit = bool(p.get("exit_due"))
+                previous_exit = (p.get("exit_due"), p.get("exit_trigger_day"), p.get("exit_trigger_kind"))
                 advance(p, {"price": row["close"], "quote_time": session["acquired_at"]},
                     context(db, settings.source, p, day), effective_config(simulation_profile(), day))
-                if not had_exit and p.get("exit_due"):
+                current_exit = (p.get("exit_due"), p.get("exit_trigger_day"), p.get("exit_trigger_kind"))
+                if p.get("exit_due") and current_exit != previous_exit:
                     p.update(exit_trigger_day=day, exit_trigger_close=row["close"], exit_trigger_kind="daily")
                     p.pop("exit_trigger_time", None)
             if not p["exit_due"] and row and row["close"] * row["adj"] < p["invalidation_adj"]:

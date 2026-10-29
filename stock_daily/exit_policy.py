@@ -23,6 +23,7 @@ class ExitPolicy:
 
 POLICY = ExitPolicy()
 LEGACY_POLICY = ExitPolicy(version="exit-v2", min_initial_atr=0)
+TREND_EXIT_REASON = "连续2个交易日收盘低于各自20日均线，趋势退出"
 
 
 def positive(value):
@@ -66,8 +67,12 @@ def context(db, source, position, cutoff):
             and [r["day"] for r in rows] == [r["day"] for r in expected]):
         closes = [r["close"] * r["adj"] for r in rows]
         result["ma20"] = mean(closes[-20:]) / rows[-1]["adj"]
-        result["trend_exit"] = all(closes[end - 1] < mean(closes[end - 20:end])
-            for end in range(len(closes) - POLICY.trend_days + 1, len(closes) + 1))
+        # Pre-entry bars still establish each MA20, but cannot count as closes
+        # held below it. The entry day's completed close is the first eligible one.
+        entry_day = position.get("entry_day")
+        result["trend_exit"] = bool(entry_day and rows[-POLICY.trend_days]["day"] >= entry_day
+            and all(closes[end - 1] < mean(closes[end - 20:end])
+                for end in range(len(closes) - POLICY.trend_days + 1, len(closes) + 1)))
         result["close"] = rows[-1]["close"]
     return result
 
@@ -106,6 +111,22 @@ def advance(position, quote, prior, config, *, policy=None):
     if state["trailing_active"]:
         distance = state["trailing_atr"] * state["atr"] if state["atr"] else state["peak"] * state["max_loss"]
         state["stop"] = max(state["stop"], state["peak"] - distance, state["break_even"])
+    # Release only the known impossible two-close trigger on an open position.
+    # Keep evidence of the correction, then check current risk before any sell.
+    # Completed trades and other latched exits are never passed through here.
+    trigger_day, entry_day = position.get("exit_trigger_day"), position.get("entry_day")
+    if (position.get("exit_due") == TREND_EXIT_REASON and position.get("exit_trigger_kind") == "daily"
+            and trigger_day and entry_day and trigger_day <= entry_day):
+        fields = ("exit_due", "exit_trigger_day", "exit_trigger_close", "exit_trigger_kind",
+                  "exit_trigger_time", "exit_trigger_price", "exit_decision", "exit_delays")
+        position.setdefault("exit_corrections", []).append({
+            "version": "trend-exit-entry-v1", "corrected_at": quote["quote_time"],
+            "reason": "原趋势退出包含买入前收盘；仅撤销未成交的错误触发，重新核验当前风控",
+            "previous": {key: position[key] for key in fields if key in position},
+        })
+        for key in fields:
+            position.pop(key, None)
+        position.update(exit_due=None, exit_trigger_day=None, exit_trigger_close=None, exit_delays=[])
     if position.get("exit_due"):
         return
     if quote["price"] <= state["stop"]:
@@ -113,6 +134,6 @@ def advance(position, quote, prior, config, *, policy=None):
         position.update(exit_due=reason, exit_trigger_day=quote["quote_time"][:10].replace("-", ""),
             exit_trigger_kind="quote", exit_trigger_time=quote["quote_time"],
             exit_trigger_price=quote["price"], exit_trigger_close=None)
-    elif prior.get("trend_exit"):
-        position.update(exit_due="连续2个交易日收盘低于各自20日均线，趋势退出",
+    elif prior.get("trend_exit") and entry_day and prior["basis_day"] > entry_day:
+        position.update(exit_due=TREND_EXIT_REASON,
             exit_trigger_day=prior["basis_day"], exit_trigger_close=prior["close"], exit_trigger_kind="daily")
