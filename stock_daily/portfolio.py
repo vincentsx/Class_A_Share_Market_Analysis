@@ -1,5 +1,6 @@
 """Cached intraday marks for confirmed simulated holdings, separate from executions."""
 
+import logging
 import math
 from datetime import datetime, timedelta
 
@@ -81,6 +82,9 @@ def refresh_portfolio(db, settings, feed=None, provider=None, current=None):
             paper_accounts.c.day <= day).order_by(paper_accounts.c.day.desc()).limit(1))
         if accounts:
             codes.update(p['code'] for p in accounts[0]['payload']['account']['positions'])
+        from .forward_study import held_codes, process
+
+        codes.update(held_codes(db, settings, day))
         quotes, missing = (feed or SinaQuotes(settings)).fetch(codes, day, "portfolio")
         if "000300.SH" not in quotes:
             raise DataError("盘中沪深300报价无法核验，保留上次估值")
@@ -90,6 +94,10 @@ def refresh_portfolio(db, settings, feed=None, provider=None, current=None):
         from .paper_trading import execute_quotes
 
         execution = execute_quotes(db, settings, payload, current)
+        try:
+            process(db, settings, payload, current)
+        except Exception:
+            logging.getLogger(__name__).exception("前向对照未完成，两组均保留原记录；默认账户继续运行")
         attempt["status"] = "success"
         db.finish_run(identifier, "success", f"盘中报价已更新：{len(quotes)}个代码；"
                       f"新增{execution.get('new_fills', 0)}笔模拟成交；{execution['status']}")

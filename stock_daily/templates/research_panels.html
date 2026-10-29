@@ -1,0 +1,30 @@
+{% set a = mail.backtest.get('attribution') %}
+{% if a %}
+<section class="mail-section"><h2>策略归因 · 盈亏来自哪里</h2>
+<p>账户截至 {{ a.day }}{% if a.as_of %} · 行情 {{ mail_time(a.as_of) }}{% endif %} · 日线绩效截至 {{ a.daily_through }}。金额单位：元。</p>
+<p>{{ '已核对：归因合计等于账户总盈亏。' if a.reconciled else '归因与账户总盈亏待核对，请勿据此判优。' }}</p>
+{% for key,label in [('by_strategy','按策略'),('by_version','按入场版本'),('by_strategy_version','策略与版本交叉'),('by_exit','按退出原因（仅已平仓）')] %}
+<details{% if loop.first %} open{% endif %}><summary>{{ label }}</summary><div class="mail-grid">
+{% for r in a[key] %}<article class="mail-card"><h3>{{ r.get('label', r.key) }}</h3>
+<p>已平仓 {{ r.closed }} / 持仓 {{ r.open }} · 平仓胜率 {{ mail_pct(r.win_rate) }}</p>
+<p>已实现 {{ mail_num(r.realized) }} · 浮动 {{ mail_num(r.unrealized) }} · 合计 {{ mail_num(r.profit) }} 元</p>
+<p>费用 {{ mail_num(r.fees) }} 元 · 平均持有 {{ mail_num(r.average_holding_sessions,1) }} 交易日</p>
+<p>{{ '不足30笔' if r.small_sample else '仍需前向验证' }}</p></article>{% else %}<p>暂无成交。</p>{% endfor %}
+</div></details>{% endfor %}<p class="mail-hint">{{ a.method }}</p></section>
+{% endif %}
+{% set study = mail.backtest.get('forward_study') %}
+{% if study %}<section class="mail-section"><h2>弱市过滤 · 独立前向对照</h2>
+<p>{{ study.message }}{% if study.get('activated_at') %} · 启用 {{ mail_time(study.activated_at) }}{% endif %}
+{% if study.get('last_batch') %} · 最新共同报价 {{ mail_time(study.last_batch) }}{% endif %} · 已观察 {{ study.get('batches',0) }} 批</p>
+<div class="mail-grid">{% for r in study.arms %}<article class="mail-card"><h3>{{ r.label }}</h3>
+<p>总资产 {{ mail_num(r.summary.equity) }} 元 · 盈亏 {{ mail_num(r.summary.profit) }} 元（{{ mail_pct(r.summary['return']) }}）</p>
+<p>现金 {{ mail_num(r.summary.available_cash) }} · 持仓市值 {{ mail_num(r.summary.market_value) }} 元</p>
+<p>已平仓 {{ r.summary.get('closed_trades',0) }} / 持仓 {{ r.summary.get('open_positions',0) }} · 费用 {{ mail_num(r.summary.fees) }} 元</p>
+{% if r.get('observations', {}).get('count') %}<p>有效报价观察最大回撤 {{ mail_pct(r.observations.max_drawdown) }} · 平均仓位 {{ mail_pct(r.observations.exposure_sum / r.observations.count * 100) }}</p>{% endif %}
+{% if r.stop %}<p>{{ r.stop.reason }}</p>{% endif %}{% if r.status == 'partial' %}<p>部分行情待核验，保留最近有效估值。</p>{% endif %}
+</article>{% endfor %}</div>
+{% if study.get('difference') is not none %}<p>过滤组资产减对照组资产：{{ mail_num(study.difference) }} 元。样本尚少，不自动判优。</p>{% endif %}
+{% if study.get('blocked') %}{% set b = study.blocked %}<details><summary>被过滤挡住的对照组买入 · {{ b.count }} 笔</summary>
+<p>对照组中的已实现损益 {{ mail_num(b.realized) }} 元，当前浮动损益 {{ mail_num(b.unrealized) }} 元；正数代表错过的盈利，负数代表避开的亏损。未核验 {{ b.missing }} 笔。展示最近100笔，合计涵盖全部。</p>
+{% for r in b['items'] %}<p>{{ r.name }} {{ r.code }} · 买入 {{ r.entry_day }} · {{ {'closed':'已平仓','open':'持仓中','unavailable':'待核验'}[r.status] }} · {{ mail_num(r.profit) }} 元</p>{% endfor %}</details>{% endif %}
+<p class="mail-hint">{{ study.method }}</p></section>{% endif %}

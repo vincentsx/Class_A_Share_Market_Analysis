@@ -84,7 +84,13 @@ def daily_payload(db, settings, day=None, public=False, portfolio=False):
         if "valuation" not in simulation:
             simulation["valuation"] = value_portfolio(db, settings, simulation)
         data["report"]["trade_plan"] = annotate_plan(data["report"].get("trade_plan"), simulation)
+    from .attribution import build_attribution
+    from .forward_study import study_view
     from .live_publish import live_url
+
+    if simulation:
+        simulation["attribution"] = build_attribution(simulation)
+        simulation["forward_study"] = study_view(db, settings, None if portfolio else report["day"])
 
     return {"dashboard": data, "tracking": observations, "histories": histories,
             "backtest": simulation,

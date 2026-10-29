@@ -43,9 +43,10 @@ def _summarize(account, day):
     account["as_of"] = day
 
 
-def reconcile(db, settings, stored, cutoff):
+def reconcile(db, settings, stored, cutoff, *, config=None):
     """Close prices may mark holdings and trigger tomorrow's exits, never rewrite fills."""
     account = deepcopy(stored)
+    config = config or simulation_profile()
     daily = account["paper_trading"]["daily_through"]
     if cutoff <= daily:
         return account
@@ -82,7 +83,7 @@ def reconcile(db, settings, stored, cutoff):
             if row and p.get("exit_policy"):
                 previous_exit = (p.get("exit_due"), p.get("exit_trigger_day"), p.get("exit_trigger_kind"))
                 advance(p, {"price": row["close"], "quote_time": session["acquired_at"]},
-                    context(db, settings.source, p, day), effective_config(simulation_profile(), day))
+                    context(db, settings.source, p, day), effective_config(config, day))
                 current_exit = (p.get("exit_due"), p.get("exit_trigger_day"), p.get("exit_trigger_kind"))
                 if p.get("exit_due") and current_exit != previous_exit:
                     p.update(exit_trigger_day=day, exit_trigger_close=row["close"], exit_trigger_kind="daily")
@@ -110,7 +111,7 @@ def reconcile(db, settings, stored, cutoff):
             peak = max(peak, point["equity"])
             drawdown = min(drawdown, (point["equity"] / peak - 1) * 100)
         account["summary"]["max_drawdown"] = drawdown
-        pause = effective_config(simulation_profile(), day).drawdown_pause
+        pause = effective_config(config, day).drawdown_pause
         if pause and account["summary"]["equity"] / peak - 1 <= -pause:
             account["execution_state"]["entry_paused"] = True
         account["performance"] = performance(curve, account["trades"], account["positions"], account["parameters"]["capital"])
@@ -173,7 +174,7 @@ def qtime_after_discovery(quote, item):
         return False
 
 
-def execute_quotes(db, settings, payload, current=None):
+def execute_quotes(db, settings, payload, current=None, *, scope=None, saved_ai=None):
     """Only the quote worker writes. A lock and persisted order keys prevent duplicates."""
     current = (current or now()).astimezone(SHANGHAI)
     day = current.strftime("%Y%m%d")
@@ -187,7 +188,7 @@ def execute_quotes(db, settings, payload, current=None):
     if payload.get("day") != day or not ("09:30" <= current.strftime("%H:%M") <= "11:30"
             or "13:00" <= current.strftime("%H:%M") <= "15:00"):
         return {"status": "skipped", "message": "非当前连续交易时段，不模拟成交"}
-    with db.lock("paper:" + settings.source):
+    with db.lock("paper:" + settings.source + (":" + scope.identity if scope else "")):
         prior_reports = db.rows(select(reports).where(reports.c.source == settings.source,
             reports.c.day < day).order_by(reports.c.day.desc()).limit(1))
         if not prior_reports:
@@ -199,20 +200,20 @@ def execute_quotes(db, settings, payload, current=None):
             trading_days.c.day > basis, trading_days.c.day <= day).order_by(trading_days.c.day))]
         if opened != [day]:
             return {"status": "waiting", "message": "交易日历或前一交易日报告不完整，暂停成交"}
-        saved = _rows(db, settings.source, day)
+        saved = scope.records(db, settings.source, day) if scope else _rows(db, settings.source, day)
         if saved and saved[0]["day"] == day:
             record = deepcopy(saved[0]["payload"])
             if payload["captured_at"] <= record["processed_at"]:
                 return {"status": "unchanged", "message": "该批报价已处理"}
         else:
-            account = simulate(db, settings, basis)
+            account = scope.account(db, settings, saved, basis) if scope else simulate(db, settings, basis)
             if account.get("stop") or account["summary"].get("through") != basis:
                 return {"status": "waiting", "message": "前一交易日账户未完整核验，暂停成交"}
             record = {"day": day, "basis_day": basis, "started_at": current.isoformat(),
                 "processed_at": "", "attempts": {}, "account": account}
             account["paper_trading"] = {"mode": "quote", "daily_through": basis, "day": day,
                 "confirmed_at": current.isoformat(), "quote_at": None, "message": "等待有效报价"}
-            account["parameters"] = asdict(simulation_profile())
+            account["parameters"] = asdict(scope.config if scope else simulation_profile())
             account["execution_version"] = "paper-quote-v1"
             for p in account["positions"]:
                 if p.get("exit_due"):
@@ -234,7 +235,7 @@ def execute_quotes(db, settings, payload, current=None):
                     "released_attempts": released}
                 if previous_migration:
                     migration["previous"] = previous_migration
-        config = effective_config(simulation_profile(), day)
+        config = effective_config(scope.config if scope else simulation_profile(), day)
         prior = {r["code"]: r for r in db.rows(select(bars).where(bars.c.source == settings.source, bars.c.day == basis))}
         prior_session = db.rows(select(sessions).where(sessions.c.source == settings.source, sessions.c.day == basis))
         universe = prior_session[0]["universe"] if prior_session else {}
@@ -246,7 +247,7 @@ def execute_quotes(db, settings, payload, current=None):
         # or put NaN into JSON (which PostgreSQL and the public feed reject).
         valid_quotes = {code: {**q, "amount": q.get("amount") if isinstance(q.get("amount"), (int, float))
             and math.isfinite(q["amount"]) and q["amount"] > 0 else None} for code, q in valid_quotes.items()}
-        previous_batches = db.rows(select(paper_quote_batches).where(
+        previous_batches = scope.quotes(db, settings.source, day, payload["captured_at"]) if scope else db.rows(select(paper_quote_batches).where(
             paper_quote_batches.c.source == settings.source, paper_quote_batches.c.day == day,
             paper_quote_batches.c.captured_at < payload["captured_at"])
             .order_by(paper_quote_batches.c.captured_at.desc()).limit(1))
@@ -255,7 +256,7 @@ def execute_quotes(db, settings, payload, current=None):
             previous_batches and previous_batches[0]["payload"].get("version") == ENTRY_VERSION) else {}
         errors = {p["code"]: error for p in account["positions"]
             if (error := _quote_error(quotes.get(p["code"]), prior.get(p["code"]), day, current))}
-        ai_context = decision_context(db, settings, current)
+        ai_context = deepcopy(saved_ai) if saved_ai is not None else decision_context(db, settings, current)
         account["decision_context"] = ai_context
         count_before = len(account["fills"])
         decisions = {}
@@ -299,7 +300,7 @@ def execute_quotes(db, settings, payload, current=None):
                 "profit": gross - cost - p["spent"], "exit_reason": p["exit_due"],
                 "net_return": ((gross - cost) / p["spent"] - 1) * 100}
             account["trades"].append(trade)
-            account["fills"].insert(0, make_fill(trade, settings.source, "sell",
+            account["fills"].insert(0, make_fill(trade, scope.identity if scope else settings.source, "sell",
                 sequence=len(account["fills"]) + 1, cash_after=cash))
             del positions[code]
         candidates = db.rows(select(signals).where(signals.c.source == settings.source, signals.c.day == basis))
@@ -459,7 +460,7 @@ def execute_quotes(db, settings, payload, current=None):
                 "exit_trigger_close": None, "exit_delays": [], "held_sessions": 0}
             advance(p, q, {"atr": item.get("atr14"), "basis_day": basis}, config, policy=POLICY)
             positions[code] = p
-            account["fills"].insert(0, make_fill(p, settings.source, "buy", sequence=len(account["fills"]) + 1, cash_after=cash))
+            account["fills"].insert(0, make_fill(p, scope.identity if scope else settings.source, "buy", sequence=len(account["fills"]) + 1, cash_after=cash))
             record["attempts"][key] = "filled"
         for key, evaluation in evaluations.items():
             code = evaluation["code"]
@@ -507,12 +508,15 @@ def execute_quotes(db, settings, payload, current=None):
             "activated_at": old_exit_policy.get("activated_at", current.isoformat())
                 if old_exit_policy.get("version") == POLICY.version else current.isoformat()}
         with db.engine.begin() as connection:
-            db.upsert(connection, paper_quote_batches, {"source": settings.source, "day": day,
-                "captured_at": payload["captured_at"], "payload": {"quotes": valid_quotes, "version": ENTRY_VERSION}})
-            db.upsert(connection, paper_accounts, {"source": settings.source, "day": day, "payload": record})
-            from .trade_mail import record_alerts
+            if scope:
+                scope.save(db, connection, settings.source, record, valid_quotes)
+            else:
+                db.upsert(connection, paper_quote_batches, {"source": settings.source, "day": day,
+                    "captured_at": payload["captured_at"], "payload": {"quotes": valid_quotes, "version": ENTRY_VERSION}})
+                db.upsert(connection, paper_accounts, {"source": settings.source, "day": day, "payload": record})
+                from .trade_mail import record_alerts
 
-            record_alerts(connection, settings, account["fills"][:len(account["fills"]) - count_before], current)
+                record_alerts(connection, settings, account["fills"][:len(account["fills"]) - count_before], current)
         return {"status": "partial" if errors else "success", "new_fills": len(account["fills"]) - count_before,
                 "message": account["paper_trading"]["message"], "decisions": decisions}
 

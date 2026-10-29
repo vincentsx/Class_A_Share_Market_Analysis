@@ -36,6 +36,7 @@ def main():
     commands.add_parser("evening", help="执行完整日线分析、补查公告并导出HTML/PNG")
     commands.add_parser("track", help="输出已保存信号的观察统计")
     commands.add_parser("health", help="查看worker心跳、任务阶段和备份状态")
+    commands.add_parser("start-forward-study", help="启用两组独立现金账户的弱市过滤前向对照，不回填成交")
     commands.add_parser("wecom-status", help="查看企业微信连接、绑定和成交提醒状态，不显示凭据或接收者")
     commands.add_parser("wecom-pair", help="生成30分钟有效的企业微信一次性绑定口令")
     wecom_retry = commands.add_parser("wecom-retry", help="重新排队当前会话的失败成交提醒")
@@ -130,7 +131,11 @@ def main():
             if not 1 <= args.days <= 90:
                 raise ValueError("--days 应为1～90")
         db = Database(settings.database_url)
-        if args.command == "run":
+        if args.command == "start-forward-study":
+            from .forward_study import start
+
+            result = start(db, settings)
+        elif args.command == "run":
             if args.stock_history:
                 from .history_recovery import make_recovery_provider
 

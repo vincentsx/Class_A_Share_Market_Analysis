@@ -25,6 +25,30 @@ from sqlalchemy.exc import IntegrityError
 from .config import now
 
 metadata = MetaData()
+forward_studies = Table(
+    "forward_studies", metadata,
+    Column("source", String(20), primary_key=True),
+    Column("id", String(64), primary_key=True),
+    Column("activated_at", String(40), nullable=False),
+    Column("payload", JSON, nullable=False),
+)
+forward_accounts = Table(
+    "forward_accounts", metadata,
+    Column("source", String(20), primary_key=True),
+    Column("study_id", String(64), primary_key=True),
+    Column("arm", String(20), primary_key=True),
+    Column("day", String(8), primary_key=True),
+    Column("payload", JSON, nullable=False),
+)
+forward_quotes = Table(
+    "forward_quotes", metadata,
+    Column("source", String(20), primary_key=True),
+    Column("study_id", String(64), primary_key=True),
+    Column("arm", String(20), primary_key=True),
+    Column("day", String(8), primary_key=True),
+    Column("captured_at", String(40), primary_key=True),
+    Column("payload", JSON, nullable=False),
+)
 announcement_evidence = Table(
     "announcement_evidence", metadata,
     Column("source", String(20), primary_key=True),

@@ -40,6 +40,11 @@ def public_portfolio(db, settings):
     simulation["market_analysis"] = latest_analysis(db, settings, now())
     simulation["decision_policy"] = configured_policy(settings)
     valuation = simulation["valuation"]
+    from .attribution import build_attribution
+    from .forward_study import study_view
+
+    simulation["attribution"] = build_attribution(simulation)
+    simulation["forward_study"] = study_view(db, settings)
     from .trade_plan import build_trade_plan
 
     plan = report.get("trade_plan") or build_trade_plan(db, settings, report)

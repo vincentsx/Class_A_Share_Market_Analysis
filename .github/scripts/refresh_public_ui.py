@@ -40,6 +40,9 @@ def refresh(folder, repository, assets, live_plan=None):
     pnl_spec = importlib.util.spec_from_file_location('public_account_metrics', assets / 'performance.py')
     pnl_helpers = importlib.util.module_from_spec(pnl_spec)
     pnl_spec.loader.exec_module(pnl_helpers)
+    attribution_spec = importlib.util.spec_from_file_location('public_attribution', assets / 'attribution.py')
+    attribution_helpers = importlib.util.module_from_spec(attribution_spec)
+    attribution_spec.loader.exec_module(attribution_helpers)
     env = Environment(loader=FileSystemLoader(assets / 'templates'), autoescape=select_autoescape(['html']))
     helpers.template_helpers(env)
     appearance = {
@@ -85,6 +88,8 @@ def refresh(folder, repository, assets, live_plan=None):
         for summary in (account.get('summary'), account.get('valuation', {}).get('summary')):
             if summary:
                 summary.update(pnl_helpers.account_pnl(summary, account.get('curve', [])))
+        if account:
+            account['attribution'] = attribution_helpers.build_attribution(account)
         if (live_plan and live_plan.get('source') == payload['dashboard']['source']
                 and live_plan.get('report_day') == payload['dashboard']['report']['day']
                 and live_plan.get('trade_plan', {}).get('basis_day') == payload['dashboard']['report']['day']):
@@ -99,6 +104,9 @@ def refresh(folder, repository, assets, live_plan=None):
                 and report_analysis.get('analysis', {}).get('as_of') == payload['dashboard']['report'].get('generated_at')):
             payload['dashboard']['report_analysis'] = report_analysis['analysis']
         if payload.get('portfolio') and (live_plan or {}).get('source') == payload['dashboard']['source']:
+            study = (live_plan or {}).get('backtest', {}).get('forward_study')
+            if study:
+                payload['backtest']['forward_study'] = study
             latest_analysis = (live_plan or {}).get('backtest', {}).get('market_analysis')
             if latest_analysis:
                 payload['backtest']['market_analysis'] = latest_analysis

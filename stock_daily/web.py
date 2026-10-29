@@ -166,6 +166,12 @@ def create_app(settings=None, database=None):
                     result['decision_policy'] = configured_policy(settings)
                 if "valuation" not in result:
                     result["valuation"] = value_portfolio(database, settings, result)
+            from .attribution import build_attribution
+            from .forward_study import study_view
+
+            result["attribution"] = build_attribution(result)
+            if config == simulation_profile():
+                result["forward_study"] = study_view(database, settings, None if live else day)
             return result
         except ValueError as error:
             raise HTTPException(422, str(error)) from None
@@ -178,6 +184,12 @@ def create_app(settings=None, database=None):
             return compare_profiles(database, settings, day)
         except ValueError as error:
             raise HTTPException(422, str(error)) from None
+
+    @app.get("/api/research/forward")
+    def research_forward(day: str | None = Query(default=None, pattern=r"^\d{8}$")):
+        from .forward_study import study_view
+
+        return study_view(database, settings, day)
 
     @app.get("/api/research/walk-forward")
     def research_walk_forward(day: str | None = Query(default=None, pattern=r"^\d{8}$"),

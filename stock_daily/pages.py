@@ -120,6 +120,8 @@ def export_pages(db, settings, output="data/pages", render_image=None):
             fingerprint_payload.pop("exported_at", None)
             if payload.get("live_url"):
                 fingerprint_payload["backtest"].pop("valuation", None)
+                fingerprint_payload["backtest"].pop("attribution", None)
+                fingerprint_payload["backtest"].pop("forward_study", None)
             fingerprint = digest(json.dumps([VERSION, asset_signature, fingerprint_payload], sort_keys=True,
                                             ensure_ascii=False, allow_nan=False).encode())
             name = f"reports/{settings.source}-{entry['day']}-{entry['slot']}.html"
